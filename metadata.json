@@ -1,0 +1,8 @@
+{
+  "name": "Remix: Remix: Remix: Remix: Remix: Remix: Remix: Bloom",
+  "description": "A teen-focused substance recovery application designed to reduce vaping, smoking, and alcohol habits with gentle, non-judgmental support, habit awareness, and personalized AI coping strategies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
