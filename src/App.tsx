@@ -19,7 +19,7 @@ import ThemeSelectorModal from "./components/ThemeSelectorModal";
 import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
-
+import { supabase, upsertUserData } from "./lib/supabase";
 export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -301,24 +301,19 @@ export default function App() {
 
 
 
-  // Synchronize changes to cloud backend DB for instant cross-device access!
+  // Synchronize changes to Supabase for durable cross-device access
   useEffect(() => {
     if (!activeUser) return;
 
     const syncToCloud = async () => {
       try {
-        await fetch("/api/sync/push", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: activeUser,
-            logs,
-            journals,
-            seedType
-          })
+        await upsertUserData({
+          logs,
+          journals,
+          seedType,
         });
       } catch (err) {
-        console.warn("Auto-sync could not reach server. Updates stored locally.", err);
+        console.warn("Auto-sync could not reach Supabase. Updates stored locally.", err);
       }
     };
 
@@ -648,7 +643,8 @@ export default function App() {
 
   const stats = getTriggerStats();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     localStorage.removeItem("bloom_current_user");
     localStorage.setItem("bloom_just_logged_out", "true");
     setActiveUser(null);
