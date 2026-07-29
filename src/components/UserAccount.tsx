@@ -1,7 +1,14 @@
 import { useState, useEffect, FormEvent } from "react";
-import { User, Lock, Eye, EyeOff, LogIn, UserPlus, LogOut, ShieldCheck, CheckCircle2 } from "lucide-react";
+import { User, Lock, Eye, EyeOff, LogIn, UserPlus, LogOut, ShieldCheck, CheckCircle2, Mail } from "lucide-react";
 import { Language, translate } from "../translations";
 import NotificationSettings from "./NotificationSettings";
+import {
+  supabase,
+  isValidEmail,
+  displayNameFromUser,
+  fetchUserData,
+  getUsernameForSession,
+} from "../lib/supabase";
 
 interface UserAccountProps {
   onLoginStateChange?: (username: string | null) => void;
@@ -10,27 +17,72 @@ interface UserAccountProps {
 
 export default function UserAccount({ onLoginStateChange, language }: UserAccountProps) {
   const [activeTab, setActiveTab] = useState<"login" | "signup">("signup");
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [consentAgreed, setConsentAgreed] = useState(false);
   const [showPrivacyDetails, setShowPrivacyDetails] = useState(false);
 
-  // Load active user on mount
+  // Restore session from Supabase on mount
   useEffect(() => {
-    const savedUser = localStorage.getItem("bloom_current_user");
-    if (savedUser) {
-      setCurrentUser(savedUser);
-      if (onLoginStateChange) onLoginStateChange(savedUser);
-    }
+    let cancelled = false;
+
+    const restore = async () => {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      if (cancelled) return;
+
+      if (!session) {
+        localStorage.removeItem("bloom_current_user");
+        return;
+      }
+
+      const name = await getUsernameForSession();
+      if (cancelled || !name) return;
+
+      localStorage.setItem("bloom_current_user", name);
+      setCurrentUser(name);
+      if (onLoginStateChange) onLoginStateChange(name);
+    };
+
+    restore();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === "SIGNED_OUT" || !session) {
+        localStorage.removeItem("bloom_current_user");
+        setCurrentUser(null);
+        if (onLoginStateChange) onLoginStateChange(null);
+        return;
+      }
+
+      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") {
+        const name = await getUsernameForSession();
+        if (!name) return;
+        localStorage.setItem("bloom_current_user", name);
+        setCurrentUser(name);
+        if (onLoginStateChange) onLoginStateChange(name);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restore once on mount; parent callback is unstable
   }, []);
 
   const clearInputs = () => {
-    setUsername("");
+    setEmail("");
+    setDisplayName("");
     setPassword("");
     setConfirmPassword("");
     setFeedback(null);
@@ -38,6 +90,31 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
 
   const showFeedback = (type: "success" | "error", message: string) => {
     setFeedback({ type, message });
+  };
+
+  const applyCloudDataToLocal = async (displayName: string) => {
+    const cloud = await fetchUserData();
+    if (!cloud) return;
+
+    localStorage.setItem(
+      `bloom_recovery_logs_v4_${displayName}`,
+      JSON.stringify(cloud.logs || [])
+    );
+    localStorage.setItem(
+      `bloom_journal_entries_v4_${displayName}`,
+      JSON.stringify(cloud.journals || [])
+    );
+    if (cloud.seed_type) {
+      localStorage.setItem(`bloom_seed_type_${displayName}`, cloud.seed_type);
+    } else {
+      localStorage.removeItem(`bloom_seed_type_${displayName}`);
+    }
+    if (cloud.smoking_profile) {
+      localStorage.setItem(
+        `bloom_smoking_profile_${displayName}`,
+        JSON.stringify(cloud.smoking_profile)
+      );
+    }
   };
 
   const handleRegister = async (e: FormEvent) => {
@@ -49,13 +126,17 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
       return;
     }
 
-    const trimmedUser = username.trim();
-    if (!trimmedUser) {
-      showFeedback("error", translate(language, "accErrUserEmpty"));
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail) {
+      showFeedback("error", translate(language, "accErrEmailEmpty"));
+      return;
+    }
+    if (!isValidEmail(trimmedEmail)) {
+      showFeedback("error", translate(language, "accErrEmailInvalid"));
       return;
     }
 
-    if (password.length < 4) {
+    if (password.length < 6) {
       showFeedback("error", translate(language, "accErrPassMin"));
       return;
     }
@@ -65,48 +146,62 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
       return;
     }
 
-    try {
-      const res = await fetch("/api/auth/signup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: trimmedUser, password })
-      });
-      const data = await res.json();
+    const name =
+      displayName.trim() ||
+      trimmedEmail.split("@")[0] ||
+      "bloom-user";
 
-      if (!res.ok) {
-        showFeedback("error", data.error || translate(language, "accErrUserTaken"));
+    setIsSubmitting(true);
+    try {
+      const { data, error } = await supabase.auth.signUp({
+        email: trimmedEmail,
+        password,
+        options: {
+          data: { username: name },
+          emailRedirectTo: window.location.origin,
+        },
+      });
+
+      if (error) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("already") || msg.includes("registered")) {
+          showFeedback("error", translate(language, "accErrEmailTaken"));
+        } else {
+          showFeedback("error", error.message);
+        }
         return;
       }
 
-      // Sync local registry for device offline backup support
-      const usersRaw = localStorage.getItem("bloom_registered_users");
-      let users: { [key: string]: string } = {};
-      if (usersRaw) {
-        try { users = JSON.parse(usersRaw); } catch (e) {}
+      // If email confirmation is enabled, session may be null — still prompt login.
+      if (data.session) {
+        await supabase.auth.signOut();
       }
-      users[trimmedUser.toLowerCase()] = password;
-      localStorage.setItem("bloom_registered_users", JSON.stringify(users));
 
-      // Sign up keeps account secure, but we do NOT automatically open the private lock yet.
-      // The user must log in to open the lock.
       setActiveTab("login");
       setPassword("");
       setConfirmPassword("");
+      setDisplayName("");
 
       let successMsg = "";
-      if (language === "ko") {
-        successMsg = `계정이 성공적으로 생성되었습니다! 전용 회복 잠금을 해제하려면 로그인해 주세요.`;
-      } else if (language === "zh") {
-        successMsg = `帐户建立成功！请在此登录以解锁您的个人康复密码锁。`;
-      } else if (language === "ms") {
-        successMsg = `Akaun berjaya didaftar! Sila daftar masuk di sini untuk membuka kunci pemulihan peribadi anda.`;
+      if (data.session) {
+        if (language === "ko") {
+          successMsg = `계정이 성공적으로 생성되었습니다! 전용 회복 잠금을 해제하려면 로그인해 주세요.`;
+        } else if (language === "zh") {
+          successMsg = `帐户建立成功！请在此登录以解锁您的个人康复密码锁。`;
+        } else if (language === "ms") {
+          successMsg = `Akaun berjaya didaftar! Sila daftar masuk di sini untuk membuka kunci pemulihan peribadi anda.`;
+        } else {
+          successMsg = `Account created successfully! Please sign in here to open your private recovery lock.`;
+        }
       } else {
-        successMsg = `Account created successfully! Please sign in here to open your private recovery lock.`;
+        successMsg = translate(language, "accSuccessCreateCheckEmail");
       }
 
       showFeedback("success", successMsg);
     } catch (err) {
       showFeedback("error", "Network connection issue. Failed to register on the cloud.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -114,83 +209,67 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
     e.preventDefault();
     setFeedback(null);
 
-    const trimmedUser = username.trim();
-    if (!trimmedUser) {
-      showFeedback("error", translate(language, "accErrNoUser"));
+    const trimmedEmail = email.trim().toLowerCase();
+    if (!trimmedEmail) {
+      showFeedback("error", translate(language, "accErrNoEmail"));
+      return;
+    }
+    if (!isValidEmail(trimmedEmail)) {
+      showFeedback("error", translate(language, "accErrEmailInvalid"));
       return;
     }
 
+    setIsSubmitting(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: trimmedUser, password })
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email: trimmedEmail,
+        password,
       });
-      const data = await res.json();
 
-      if (!res.ok) {
-        showFeedback("error", data.error || translate(language, "accErrInvalid"));
+      if (error?.code === "email_not_confirmed") {
+        const { error: resendError } = await supabase.auth.resend({
+          type: "signup",
+          email: trimmedEmail,
+          options: {
+            emailRedirectTo: window.location.origin,
+          },
+        });
+        showFeedback(
+          resendError ? "error" : "success",
+          resendError?.message || translate(language, "accEmailConfirmationResent")
+        );
         return;
       }
 
-      // Save registry locally
-      const usersRaw = localStorage.getItem("bloom_registered_users");
-      let users: { [key: string]: string } = {};
-      if (usersRaw) {
-        try { users = JSON.parse(usersRaw); } catch (e) {}
-      }
-      users[trimmedUser.toLowerCase()] = password;
-      localStorage.setItem("bloom_registered_users", JSON.stringify(users));
-
-      // Sync cloud data to local storage for instant loading!
-      if (data.logs) {
-        localStorage.setItem(`bloom_recovery_logs_v4_${data.username}`, JSON.stringify(data.logs));
-      }
-      if (data.journals) {
-        localStorage.setItem(`bloom_journal_entries_v4_${data.username}`, JSON.stringify(data.journals));
-      }
-      if (data.seedType) {
-        localStorage.setItem(`bloom_seed_type_${data.username}`, data.seedType);
-      } else {
-        localStorage.removeItem(`bloom_seed_type_${data.username}`);
+      if (error || !data.user) {
+        showFeedback("error", error?.message || translate(language, "accErrInvalid"));
+        return;
       }
 
-      // Login user
-      localStorage.setItem("bloom_current_user", data.username);
+      const name = displayNameFromUser(data.user);
+
+      await applyCloudDataToLocal(name);
+
+      localStorage.setItem("bloom_current_user", name);
       localStorage.setItem("bloom_current_page", "did_consume");
-      setCurrentUser(data.username);
-      if (onLoginStateChange) onLoginStateChange(data.username);
+      setCurrentUser(name);
+      if (onLoginStateChange) onLoginStateChange(name);
 
-      showFeedback("success", translate(language, "accSuccessLogin", { username: data.username }));
+      showFeedback("success", translate(language, "accSuccessLogin", { username: name }));
       clearInputs();
 
-      // Small delay then trigger quick reload to flush context-wide changes
       setTimeout(() => {
         window.location.reload();
       }, 500);
-
     } catch (err) {
-      // Local check fallback
-      const usersRaw = localStorage.getItem("bloom_registered_users");
-      let users: { [key: string]: string } = {};
-      if (usersRaw) {
-        try { users = JSON.parse(usersRaw); } catch (e) {}
-      }
-      const savedPassword = users[trimmedUser.toLowerCase()];
-      if (savedPassword && savedPassword === password) {
-        localStorage.setItem("bloom_current_user", trimmedUser);
-        localStorage.setItem("bloom_current_page", "did_consume");
-        setCurrentUser(trimmedUser);
-        if (onLoginStateChange) onLoginStateChange(trimmedUser);
-        showFeedback("success", translate(language, "accSuccessLogin", { username: trimmedUser }));
-        clearInputs();
-      } else {
-        showFeedback("error", "Failed to sign in. Please check connection or password.");
-      }
+      showFeedback("error", "Failed to sign in. Please check connection or password.");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     localStorage.removeItem("bloom_current_user");
     localStorage.setItem("bloom_just_logged_out", "true");
     setCurrentUser(null);
@@ -333,20 +412,38 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
 
           {/* Form */}
           <form onSubmit={activeTab === "signup" ? handleRegister : handleLogin} className="space-y-3">
-            {/* Username Input */}
+            {/* Email Input */}
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                <User className="w-4 h-4" />
+                <Mail className="w-4 h-4" />
               </div>
               <input
-                type="text"
+                type="email"
+                autoComplete="email"
                 required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder={translate(language, "accChooseUser")}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder={translate(language, "accEmail")}
                 className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
               />
             </div>
+
+            {/* Display name (signup only) */}
+            {activeTab === "signup" && (
+              <div className="relative">
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
+                  <User className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  autoComplete="nickname"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  placeholder={translate(language, "accDisplayName")}
+                  className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
+                />
+              </div>
+            )}
 
             {/* Password Input */}
             <div className="relative">
@@ -355,6 +452,7 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
               </div>
               <input
                 type={showPassword ? "text" : "password"}
+                autoComplete={activeTab === "signup" ? "new-password" : "current-password"}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -379,6 +477,7 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
                   </div>
                   <input
                     type={showPassword ? "text" : "password"}
+                    autoComplete="new-password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
@@ -458,15 +557,16 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
             {/* Action Submit Button */}
             <button
               type="submit"
-              className="w-full py-2.5 px-4 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 shadow-md shadow-teal-500/20 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all border-none"
+              disabled={isSubmitting}
+              className="w-full py-2.5 px-4 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 shadow-md shadow-teal-500/20 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all border-none disabled:opacity-60 disabled:cursor-not-allowed"
             >
               {activeTab === "signup" ? (
                 <>
-                  <UserPlus className="w-4 h-4" /> {translate(language, "accCreateBtn")}
+                  <UserPlus className="w-4 h-4" /> {isSubmitting ? "..." : translate(language, "accCreateBtn")}
                 </>
               ) : (
                 <>
-                  <LogIn className="w-4 h-4" /> {translate(language, "accLoginBtn")}
+                  <LogIn className="w-4 h-4" /> {isSubmitting ? "..." : translate(language, "accLoginBtn")}
                 </>
               )}
             </button>
