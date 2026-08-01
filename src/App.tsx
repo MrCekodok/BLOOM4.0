@@ -14,13 +14,15 @@ import SmokingProfileSetup from "./components/SmokingProfileSetup";
 import UrgeQuestModal from "./components/UrgeQuestModal";
 import TourGuide from "./components/TourGuide";
 import LanguageSelector from "./components/LanguageSelector";
-import CopyrightFooter from "./components/CopyrightFooter";
 import HealthQuestsModal, { HealthQuestType } from "./components/HealthQuestsModal";
 import ThemeSelectorModal from "./components/ThemeSelectorModal";
+import LegalPagesModal, { LegalTab } from "./components/LegalPagesModal";
+import AccountSettingsModal from "./components/AccountSettingsModal";
 import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
-import { supabase, upsertUserData } from "./lib/supabase";
+import { syncUserProgressToSupabase, fetchUserDataFromSupabase, isSupabaseConfigured } from "./lib/supabase";
+
 export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [journals, setJournals] = useState<JournalEntry[]>([]);
@@ -29,6 +31,21 @@ export default function App() {
   const [activeHealthQuestTab, setActiveHealthQuestTab] = useState<HealthQuestType>("breathing");
   const [colorTheme, setColorTheme] = useState<ThemeId>(() => getStoredTheme());
   const [isThemeModalOpen, setIsThemeModalOpen] = useState<boolean>(false);
+
+  // Legal & Account Settings Modals
+  const [isLegalModalOpen, setIsLegalModalOpen] = useState<boolean>(false);
+  const [legalModalTab, setLegalModalTab] = useState<LegalTab>("privacy");
+  const [isAccountSettingsOpen, setIsAccountSettingsOpen] = useState<boolean>(false);
+
+  const handleOpenLegal = (tab: LegalTab = "privacy") => {
+    setLegalModalTab(tab);
+    setIsLegalModalOpen(true);
+  };
+
+  const handleOpenAccountSettings = () => {
+    setIsAccountSettingsOpen(true);
+  };
+
 
   useEffect(() => {
     applyTheme(colorTheme);
@@ -302,19 +319,33 @@ export default function App() {
 
 
 
-  // Synchronize changes to Supabase for durable cross-device access
+  // Synchronize changes to cloud backend DB and Supabase for instant cross-device access!
   useEffect(() => {
     if (!activeUser) return;
 
     const syncToCloud = async () => {
       try {
-        await upsertUserData({
-          logs,
-          journals,
-          seedType,
+        if (isSupabaseConfigured()) {
+          const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
+          if (userId) {
+            await syncUserProgressToSupabase(userId, logs, journals, smokingProfile, {
+              seedType
+            });
+          }
+        }
+
+        await fetch("/api/sync/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: activeUser,
+            logs,
+            journals,
+            seedType
+          })
         });
       } catch (err) {
-        console.warn("Auto-sync could not reach Supabase. Updates stored locally.", err);
+        console.warn("Auto-sync could not reach server. Updates stored locally.", err);
       }
     };
 
@@ -323,7 +354,7 @@ export default function App() {
     }, 1200);
 
     return () => clearTimeout(timer);
-  }, [logs, journals, activeUser, seedType]);
+  }, [logs, journals, smokingProfile, activeUser, seedType]);
 
   // Register Service Worker and proactively ask for notification permission on first load if logged in
   useEffect(() => {
@@ -644,8 +675,7 @@ export default function App() {
 
   const stats = getTriggerStats();
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleLogout = () => {
     localStorage.removeItem("bloom_current_user");
     localStorage.setItem("bloom_just_logged_out", "true");
     setActiveUser(null);
@@ -916,7 +946,10 @@ export default function App() {
                   if (username) handleSetCurrentPage("did_consume");
                 }}
                 language={language}
+                onOpenLegal={handleOpenLegal}
+                onOpenSettings={handleOpenAccountSettings}
               />
+
 
               {/* Right Side Entertaining Companion: Floating Wing-Flapping Butterfly and Blooming Tulip growing on Grass */}
               <div className="absolute -right-16 sm:-right-20 md:-right-24 lg:-right-32 bottom-2 w-14 sm:w-16 md:w-24 pointer-events-none select-none z-10 hidden sm:flex flex-col items-center">
@@ -1387,11 +1420,102 @@ export default function App() {
         plantEmoji="🍅"
       />
 
+      {/* Footer Navigation for Legal, Security & Support */}
+      <footer className="mt-12 pt-6 pb-8 border-t border-emerald-900/20 text-center relative z-20 text-xs text-emerald-950/80 font-sans space-y-3">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 font-bold">
+          <button
+            type="button"
+            onClick={() => handleOpenLegal("privacy")}
+            className="hover:text-emerald-900 hover:underline cursor-pointer border-none bg-transparent"
+          >
+            🛡️ {language === "ms" ? "Dasar Privasi" : language === "zh" ? "隐私政策" : language === "ko" ? "개인정보" : "Privacy Policy"}
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => handleOpenLegal("terms")}
+            className="hover:text-emerald-900 hover:underline cursor-pointer border-none bg-transparent"
+          >
+            📜 {language === "ms" ? "Syarat Perkhidmatan" : language === "zh" ? "服务条款" : language === "ko" ? "이용약관" : "Terms of Service"}
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => handleOpenLegal("disclaimer")}
+            className="hover:text-emerald-900 hover:underline cursor-pointer border-none bg-transparent"
+          >
+            🩺 {language === "ms" ? "Penafian Perubatan" : language === "zh" ? "医疗免责" : language === "ko" ? "의료면책" : "Medical Disclaimer"}
+          </button>
+          <span>•</span>
+          <button
+            type="button"
+            onClick={() => handleOpenLegal("contact")}
+            className="hover:text-emerald-900 hover:underline cursor-pointer border-none bg-transparent"
+          >
+            ✉️ {language === "ms" ? "Hubungi Kami" : language === "zh" ? "联系我们" : language === "ko" ? "문의하기" : "Contact Us"}
+          </button>
+          {activeUser && (
+            <>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={handleOpenAccountSettings}
+                className="hover:text-emerald-900 hover:underline cursor-pointer border-none bg-transparent font-extrabold text-emerald-900"
+              >
+                ⚙️ {language === "ms" ? "Tetapan Akaun" : language === "zh" ? "账户设置" : language === "ko" ? "계정 설정" : "Account Settings"}
+              </button>
+            </>
+          )}
+        </div>
+
+        <div className="text-[11px] font-medium text-stone-600 max-w-xl mx-auto px-4 leading-relaxed">
+          Bloom is an educational self-help companion app for smoking and vaping cessation. Data encrypted via Supabase Auth & RLS. Aligned with Malaysia PDPA, EU GDPR, and Korea PIPC principles.
+        </div>
+        <div className="text-[10px] font-mono text-emerald-900/60">
+          © {new Date().getFullYear()}{" "}
+          <a
+            href="https://smkkunak.edu.my/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-emerald-900/80 hover:text-emerald-950 underline underline-offset-2 transition-colors"
+          >
+            SMK Kunak
+          </a>
+          {" "}• Bloom Cessation Companion
+        </div>
+      </footer>
+
+      {/* Legal, Privacy & Contact Pages Modal */}
+      <LegalPagesModal
+        isOpen={isLegalModalOpen}
+        initialTab={legalModalTab}
+        onClose={() => setIsLegalModalOpen(false)}
+        language={language}
+      />
+
+      {/* User Account & Security Settings Modal */}
+      {activeUser && (
+        <AccountSettingsModal
+          isOpen={isAccountSettingsOpen}
+          currentUser={activeUser}
+          onClose={() => setIsAccountSettingsOpen(false)}
+          onAccountUpdated={(newUsername) => {
+            setActiveUser(newUsername);
+            setIsAccountSettingsOpen(false);
+          }}
+          onAccountDeleted={() => {
+            setActiveUser(null);
+            setIsAccountSettingsOpen(false);
+            handleSetCurrentPage("did_consume");
+          }}
+          language={language}
+        />
+      )}
+
       {/* Floating Lower-Right Language Selector */}
       <LanguageSelector currentLanguage={language} onSelectLanguage={handleLanguageChange} />
-
-      <CopyrightFooter />
  
     </div>
   );
 }
+

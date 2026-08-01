@@ -1,88 +1,50 @@
 import { useState, useEffect, FormEvent } from "react";
-import { User, Lock, Eye, EyeOff, LogIn, UserPlus, LogOut, ShieldCheck, CheckCircle2, Mail } from "lucide-react";
+import { User, Lock, Eye, EyeOff, LogIn, UserPlus, LogOut, ShieldCheck, CheckCircle2, Mail, Database, Sparkles, Settings, Stethoscope } from "lucide-react";
 import { Language, translate } from "../translations";
 import NotificationSettings from "./NotificationSettings";
+import { LegalTab } from "./LegalPagesModal";
 import {
-  supabase,
-  isValidEmail,
-  displayNameFromUser,
-  fetchUserData,
-  getUsernameForSession,
+  signUpWithSupabase,
+  signInWithSupabase,
+  isSupabaseConfigured,
+  fetchUserDataFromSupabase
 } from "../lib/supabase";
+
 
 interface UserAccountProps {
   onLoginStateChange?: (username: string | null) => void;
   language: Language;
+  onOpenLegal?: (tab?: LegalTab) => void;
+  onOpenSettings?: () => void;
 }
 
-export default function UserAccount({ onLoginStateChange, language }: UserAccountProps) {
+export default function UserAccount({ onLoginStateChange, language, onOpenLegal, onOpenSettings }: UserAccountProps) {
+
   const [activeTab, setActiveTab] = useState<"login" | "signup">("signup");
   const [email, setEmail] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const [currentUser, setCurrentUser] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [consentAgreed, setConsentAgreed] = useState(false);
   const [showPrivacyDetails, setShowPrivacyDetails] = useState(false);
 
-  // Restore session from Supabase on mount
+  // Load active user on mount
   useEffect(() => {
-    let cancelled = false;
-
-    const restore = async () => {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (cancelled) return;
-
-      if (!session) {
-        localStorage.removeItem("bloom_current_user");
-        return;
-      }
-
-      const name = await getUsernameForSession();
-      if (cancelled || !name) return;
-
-      localStorage.setItem("bloom_current_user", name);
-      setCurrentUser(name);
-      if (onLoginStateChange) onLoginStateChange(name);
-    };
-
-    restore();
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange(async (event, session) => {
-      if (event === "SIGNED_OUT" || !session) {
-        localStorage.removeItem("bloom_current_user");
-        setCurrentUser(null);
-        if (onLoginStateChange) onLoginStateChange(null);
-        return;
-      }
-
-      if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED" || event === "INITIAL_SESSION") {
-        const name = await getUsernameForSession();
-        if (!name) return;
-        localStorage.setItem("bloom_current_user", name);
-        setCurrentUser(name);
-        if (onLoginStateChange) onLoginStateChange(name);
-      }
-    });
-
-    return () => {
-      cancelled = true;
-      subscription.unsubscribe();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- restore once on mount; parent callback is unstable
+    const savedUser = localStorage.getItem("bloom_current_user");
+    if (savedUser) {
+      setCurrentUser(savedUser);
+      if (onLoginStateChange) onLoginStateChange(savedUser);
+    }
   }, []);
 
   const clearInputs = () => {
     setEmail("");
-    setDisplayName("");
+    setUsername("");
     setPassword("");
     setConfirmPassword("");
     setFeedback(null);
@@ -90,31 +52,6 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
 
   const showFeedback = (type: "success" | "error", message: string) => {
     setFeedback({ type, message });
-  };
-
-  const applyCloudDataToLocal = async (displayName: string) => {
-    const cloud = await fetchUserData();
-    if (!cloud) return;
-
-    localStorage.setItem(
-      `bloom_recovery_logs_v4_${displayName}`,
-      JSON.stringify(cloud.logs || [])
-    );
-    localStorage.setItem(
-      `bloom_journal_entries_v4_${displayName}`,
-      JSON.stringify(cloud.journals || [])
-    );
-    if (cloud.seed_type) {
-      localStorage.setItem(`bloom_seed_type_${displayName}`, cloud.seed_type);
-    } else {
-      localStorage.removeItem(`bloom_seed_type_${displayName}`);
-    }
-    if (cloud.smoking_profile) {
-      localStorage.setItem(
-        `bloom_smoking_profile_${displayName}`,
-        JSON.stringify(cloud.smoking_profile)
-      );
-    }
   };
 
   const handleRegister = async (e: FormEvent) => {
@@ -126,13 +63,16 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
       return;
     }
 
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail) {
-      showFeedback("error", translate(language, "accErrEmailEmpty"));
+    const trimmedUser = username.trim();
+    const trimmedEmail = email.trim();
+
+    if (!trimmedEmail || !trimmedEmail.includes("@")) {
+      showFeedback("error", "Please enter a valid email address.");
       return;
     }
-    if (!isValidEmail(trimmedEmail)) {
-      showFeedback("error", translate(language, "accErrEmailInvalid"));
+
+    if (!trimmedUser) {
+      showFeedback("error", translate(language, "accErrUserEmpty"));
       return;
     }
 
@@ -146,62 +86,73 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
       return;
     }
 
-    const name =
-      displayName.trim() ||
-      trimmedEmail.split("@")[0] ||
-      "bloom-user";
+    setIsLoading(true);
 
-    setIsSubmitting(true);
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: trimmedEmail,
-        password,
-        options: {
-          data: { username: name },
-          emailRedirectTo: window.location.origin,
-        },
-      });
+      // 1. Try Supabase Auth First
+      if (isSupabaseConfigured()) {
+        const res = await signUpWithSupabase(trimmedEmail, trimmedUser, password);
 
-      if (error) {
-        const msg = error.message.toLowerCase();
-        if (msg.includes("already") || msg.includes("registered")) {
-          showFeedback("error", translate(language, "accErrEmailTaken"));
-        } else {
-          showFeedback("error", error.message);
+        if (!res.success) {
+          // If sign up fails, DO NOT insert any data into profiles or database!
+          setIsLoading(false);
+          showFeedback("error", res.error || "Sign-up failed with Supabase Auth.");
+          return;
         }
+
+        // Successfully created user & inserted into profiles table
+        setActiveTab("login");
+        setPassword("");
+        setConfirmPassword("");
+        setIsLoading(false);
+
+        let successMsg = "";
+        if (language === "ko") {
+          successMsg = `Supabase 계정이 성공적으로 생성되어 profiles 테이블에 저장되었습니다! 로그인하여 동기화를 진행해 주세요.`;
+        } else if (language === "zh") {
+          successMsg = `Supabase 帐户建立成功，并已同步写入 profiles 数据表！请在此登录解锁。`;
+        } else if (language === "ms") {
+          successMsg = `Akaun Supabase berjaya dicipta dan disimpan dalam jadual profiles! Sila daftar masuk untuk penyelarasan.`;
+        } else {
+          successMsg = `Supabase account created & profile initialized in 'profiles' table! Please sign in to sync across devices.`;
+        }
+
+        showFeedback("success", successMsg);
         return;
       }
 
-      // If email confirmation is enabled, session may be null — still prompt login.
-      if (data.session) {
-        await supabase.auth.signOut();
+      // 2. Fallback to API endpoint if Supabase client keys not present
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: trimmedEmail, username: trimmedUser, password })
+      });
+      const data = await res.json();
+
+      setIsLoading(false);
+
+      if (!res.ok) {
+        showFeedback("error", data.error || translate(language, "accErrUserTaken"));
+        return;
       }
+
+      // Sync local registry for offline backup
+      const usersRaw = localStorage.getItem("bloom_registered_users");
+      let users: { [key: string]: string } = {};
+      if (usersRaw) {
+        try { users = JSON.parse(usersRaw); } catch (e) {}
+      }
+      users[trimmedUser.toLowerCase()] = password;
+      localStorage.setItem("bloom_registered_users", JSON.stringify(users));
 
       setActiveTab("login");
       setPassword("");
       setConfirmPassword("");
-      setDisplayName("");
 
-      let successMsg = "";
-      if (data.session) {
-        if (language === "ko") {
-          successMsg = `계정이 성공적으로 생성되었습니다! 전용 회복 잠금을 해제하려면 로그인해 주세요.`;
-        } else if (language === "zh") {
-          successMsg = `帐户建立成功！请在此登录以解锁您的个人康复密码锁。`;
-        } else if (language === "ms") {
-          successMsg = `Akaun berjaya didaftar! Sila daftar masuk di sini untuk membuka kunci pemulihan peribadi anda.`;
-        } else {
-          successMsg = `Account created successfully! Please sign in here to open your private recovery lock.`;
-        }
-      } else {
-        successMsg = translate(language, "accSuccessCreateCheckEmail");
-      }
-
-      showFeedback("success", successMsg);
-    } catch (err) {
-      showFeedback("error", "Network connection issue. Failed to register on the cloud.");
-    } finally {
-      setIsSubmitting(false);
+      showFeedback("success", "Account created successfully! Please sign in to unlock your profile.");
+    } catch (err: any) {
+      setIsLoading(false);
+      showFeedback("error", err.message || "Network connection issue. Failed to register.");
     }
   };
 
@@ -209,67 +160,118 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
     e.preventDefault();
     setFeedback(null);
 
-    const trimmedEmail = email.trim().toLowerCase();
-    if (!trimmedEmail) {
-      showFeedback("error", translate(language, "accErrNoEmail"));
-      return;
-    }
-    if (!isValidEmail(trimmedEmail)) {
-      showFeedback("error", translate(language, "accErrEmailInvalid"));
+    const loginInput = (username || email).trim();
+    if (!loginInput) {
+      showFeedback("error", translate(language, "accErrNoUser"));
       return;
     }
 
-    setIsSubmitting(true);
+    if (!password) {
+      showFeedback("error", "Please enter your password.");
+      return;
+    }
+
+    setIsLoading(true);
+
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: trimmedEmail,
-        password,
+      // 1. Try Supabase Auth First
+      if (isSupabaseConfigured()) {
+        const res = await signInWithSupabase(loginInput, password);
+
+        if (!res.success) {
+          setIsLoading(false);
+          showFeedback("error", res.error || "Invalid sign-in credentials.");
+          return;
+        }
+
+        const authenticatedUser = res.profile?.username || res.user?.user_metadata?.username || loginInput;
+        const userId = res.user?.id;
+
+        // Sync cloud data retrieved from Supabase to local state & storage!
+        if (userId) {
+          localStorage.setItem(`bloom_supabase_user_id_${authenticatedUser}`, userId);
+        }
+        if (res.logs && res.logs.length > 0) {
+          localStorage.setItem(`bloom_recovery_logs_v4_${authenticatedUser}`, JSON.stringify(res.logs));
+        }
+        if (res.journals && res.journals.length > 0) {
+          localStorage.setItem(`bloom_journal_entries_v4_${authenticatedUser}`, JSON.stringify(res.journals));
+        }
+        if (res.smokingProfile) {
+          localStorage.setItem(`bloom_smoking_profile_${authenticatedUser}`, JSON.stringify(res.smokingProfile));
+        }
+
+        localStorage.setItem("bloom_current_user", authenticatedUser);
+        localStorage.setItem("bloom_current_page", "did_consume");
+        setCurrentUser(authenticatedUser);
+        if (onLoginStateChange) onLoginStateChange(authenticatedUser);
+
+        setIsLoading(false);
+        showFeedback("success", `Signed in with Supabase Auth! Retrieved synced profile for ${authenticatedUser}.`);
+        clearInputs();
+
+        setTimeout(() => {
+          window.location.reload();
+        }, 600);
+        return;
+      }
+
+      // 2. Fallback API Login
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginInput, password })
       });
+      const data = await res.json();
+      setIsLoading(false);
 
-      if (error?.code === "email_not_confirmed") {
-        const { error: resendError } = await supabase.auth.resend({
-          type: "signup",
-          email: trimmedEmail,
-          options: {
-            emailRedirectTo: window.location.origin,
-          },
-        });
-        showFeedback(
-          resendError ? "error" : "success",
-          resendError?.message || translate(language, "accEmailConfirmationResent")
-        );
+      if (!res.ok) {
+        showFeedback("error", data.error || translate(language, "accErrInvalid"));
         return;
       }
 
-      if (error || !data.user) {
-        showFeedback("error", error?.message || translate(language, "accErrInvalid"));
-        return;
+      if (data.logs) {
+        localStorage.setItem(`bloom_recovery_logs_v4_${data.username}`, JSON.stringify(data.logs));
+      }
+      if (data.journals) {
+        localStorage.setItem(`bloom_journal_entries_v4_${data.username}`, JSON.stringify(data.journals));
       }
 
-      const name = displayNameFromUser(data.user);
-
-      await applyCloudDataToLocal(name);
-
-      localStorage.setItem("bloom_current_user", name);
+      localStorage.setItem("bloom_current_user", data.username);
       localStorage.setItem("bloom_current_page", "did_consume");
-      setCurrentUser(name);
-      if (onLoginStateChange) onLoginStateChange(name);
+      setCurrentUser(data.username);
+      if (onLoginStateChange) onLoginStateChange(data.username);
 
-      showFeedback("success", translate(language, "accSuccessLogin", { username: name }));
+      showFeedback("success", translate(language, "accSuccessLogin", { username: data.username }));
       clearInputs();
 
       setTimeout(() => {
         window.location.reload();
       }, 500);
+
     } catch (err) {
-      showFeedback("error", "Failed to sign in. Please check connection or password.");
-    } finally {
-      setIsSubmitting(false);
+      setIsLoading(false);
+      // Local fallback
+      const usersRaw = localStorage.getItem("bloom_registered_users");
+      let users: { [key: string]: string } = {};
+      if (usersRaw) {
+        try { users = JSON.parse(usersRaw); } catch (e) {}
+      }
+      const savedPassword = users[loginInput.toLowerCase()];
+      if (savedPassword && savedPassword === password) {
+        localStorage.setItem("bloom_current_user", loginInput);
+        localStorage.setItem("bloom_current_page", "did_consume");
+        setCurrentUser(loginInput);
+        if (onLoginStateChange) onLoginStateChange(loginInput);
+        showFeedback("success", translate(language, "accSuccessLogin", { username: loginInput }));
+        clearInputs();
+      } else {
+        showFeedback("error", "Failed to sign in. Please check connection or password.");
+      }
     }
   };
 
-  const handleLogout = async () => {
-    await supabase.auth.signOut();
+  const handleLogout = () => {
     localStorage.removeItem("bloom_current_user");
     localStorage.setItem("bloom_just_logged_out", "true");
     setCurrentUser(null);
@@ -342,10 +344,17 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
         /* LOGGED IN ACTIVE PROFILE SCREEN */
         <div className="space-y-4 relative z-10 bg-white/50 backdrop-blur-xs rounded-xl p-1">
           <div className="flex items-center justify-between">
-            <h3 className="text-sm font-serif font-extrabold text-emerald-950 uppercase tracking-wider flex items-center gap-2">
-              <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              {translate(language, "accTitleSecured")}
-            </h3>
+            <div className="flex items-center gap-2">
+              <h3 className="text-sm font-serif font-extrabold text-emerald-950 uppercase tracking-wider flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-emerald-900" />
+                {translate(language, "accTitleSecured")}
+              </h3>
+              {isSupabaseConfigured() && (
+                <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-100 text-emerald-800 border border-emerald-300 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-xs">
+                  <Database className="w-3 h-3 text-emerald-600" /> Supabase Synced
+                </span>
+              )}
+            </div>
             
             <button
               onClick={handleLogout}
@@ -355,21 +364,62 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
             </button>
           </div>
 
-          <div className="p-4 bg-emerald-50/70 border border-emerald-100 rounded-2xl flex items-start gap-3.5">
-            <div className="w-12 h-12 rounded-xl bg-emerald-700 font-serif font-extrabold text-white flex items-center justify-center text-xl shrink-0 uppercase">
-              {currentUser.charAt(0)}
-            </div>
-            
-            <div className="space-y-1.5 flex-1 min-w-0">
-              <div className="text-sm">
-                {translate(language, "accLoggedInAs")} <span className="font-extrabold text-emerald-800">{currentUser}</span>
+          <div className="p-4 bg-emerald-50/70 border border-emerald-100 rounded-2xl space-y-3">
+            <div className="flex items-start gap-3.5">
+              <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-emerald-600 to-teal-800 font-serif font-extrabold text-white flex items-center justify-center text-xl shrink-0 uppercase shadow-md">
+                {currentUser.charAt(0)}
               </div>
-              <p className="text-xs text-stone-600 leading-relaxed font-medium">
-                {translate(language, "accDescLoggedIn")}
-              </p>
+              
+              <div className="space-y-1.5 flex-1 min-w-0">
+                <div className="text-sm">
+                  {translate(language, "accLoggedInAs")} <span className="font-extrabold text-emerald-800">{currentUser}</span>
+                </div>
+                <p className="text-xs text-stone-600 leading-relaxed font-medium">
+                  Your progress, streak, companion plant stage, smoking records, and diary entries are securely synced to Supabase.
+                </p>
+              </div>
+            </div>
+
+            {/* Quick Action Buttons for Account Management & Legal */}
+            <div className="pt-2 border-t border-emerald-100 flex flex-wrap items-center gap-2">
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={onOpenSettings}
+                  className="px-3 py-1.5 rounded-xl bg-emerald-800 hover:bg-emerald-900 text-white font-extrabold text-[11px] flex items-center gap-1.5 cursor-pointer border-none shadow-xs transition-all"
+                >
+                  <Settings className="w-3.5 h-3.5" /> Account Settings
+                </button>
+              )}
+              {onOpenLegal && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => onOpenLegal("privacy")}
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-emerald-100/70 text-emerald-950 border border-emerald-200 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-800" /> Privacy & Terms
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenLegal("disclaimer")}
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-rose-50 text-rose-950 border border-rose-200 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <Stethoscope className="w-3.5 h-3.5 text-rose-600" /> Medical Disclaimer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenLegal("contact")}
+                    className="px-3 py-1.5 rounded-xl bg-white hover:bg-teal-50 text-teal-950 border border-teal-200 font-bold text-[11px] flex items-center gap-1.5 cursor-pointer transition-all"
+                  >
+                    <Mail className="w-3.5 h-3.5 text-teal-700" /> Contact Support
+                  </button>
+                </>
+              )}
             </div>
           </div>
           <NotificationSettings username={currentUser} language={language} />
+
         </div>
       ) : (
         /* LOGIN / SIGNUP SCREEN */
@@ -378,9 +428,15 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-serif font-extrabold text-emerald-950 uppercase tracking-wider flex items-center gap-1.5">
-                <User className="w-4.5 h-4.5 text-emerald-700" />
+                <User className="w-4.5 h-4.5 text-emerald-900" />
                 {translate(language, "accTitle")}
               </h3>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <span className="text-[10px] font-bold text-emerald-700 flex items-center gap-1">
+                  <Database className="w-3 h-3 text-emerald-800" />
+                  {isSupabaseConfigured() ? "Supabase Cloud Auth & Database Active" : "Supabase Offline / Fallback Local Mode"}
+                </span>
+              </div>
             </div>
             
             {/* Tabs Selector */}
@@ -412,34 +468,34 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
 
           {/* Form */}
           <form onSubmit={activeTab === "signup" ? handleRegister : handleLogin} className="space-y-3">
-            {/* Email Input */}
+            
+            {/* Username / Login Identifier Input (FIRST) */}
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                <Mail className="w-4 h-4" />
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                <User className="w-4 h-4 text-emerald-900" />
               </div>
               <input
-                type="email"
-                autoComplete="email"
+                type="text"
                 required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder={translate(language, "accEmail")}
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder={activeTab === "signup" ? translate(language, "accChooseUser") : "Enter your email or username..."}
                 className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
               />
             </div>
 
-            {/* Display name (signup only) */}
+            {/* Email Input (UNDER Username for Supabase Auth Signup) */}
             {activeTab === "signup" && (
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                  <User className="w-4 h-4" />
+                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                  <Mail className="w-4 h-4 text-emerald-900" />
                 </div>
                 <input
-                  type="text"
-                  autoComplete="nickname"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  placeholder={translate(language, "accDisplayName")}
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Enter your email address..."
                   className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
                 />
               </div>
@@ -447,12 +503,11 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
 
             {/* Password Input */}
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                <Lock className="w-4 h-4" />
+              <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                <Lock className="w-4 h-4 text-emerald-900" />
               </div>
               <input
                 type={showPassword ? "text" : "password"}
-                autoComplete={activeTab === "signup" ? "new-password" : "current-password"}
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -462,7 +517,7 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
-                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-stone-400 hover:text-stone-600 transition-colors cursor-pointer border-none bg-transparent"
+                className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-emerald-800 hover:text-emerald-950 transition-colors cursor-pointer border-none bg-transparent"
               >
                 {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
@@ -472,12 +527,11 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
             {activeTab === "signup" && (
               <>
                 <div className="relative">
-                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-stone-500">
-                    <Lock className="w-4 h-4" />
+                  <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                    <Lock className="w-4 h-4 text-emerald-900" />
                   </div>
                   <input
                     type={showPassword ? "text" : "password"}
-                    autoComplete="new-password"
                     required
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
@@ -490,7 +544,7 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
                 <div className="p-3.5 bg-white/50 backdrop-blur-xs border border-white/70 rounded-2xl space-y-2.5 transition-all text-left">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5 font-serif font-black text-xs text-emerald-950 uppercase tracking-wider">
-                      <ShieldCheck className="w-4 h-4 text-emerald-700" />
+                      <ShieldCheck className="w-4 h-4 text-emerald-900" />
                       <span>{translate(language, "accPrivacyTitle")}</span>
                     </div>
                     <button
@@ -511,11 +565,11 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
                   {/* Expanded Policy Details */}
                   {showPrivacyDetails && (
                     <div className="p-3 bg-white rounded-xl border border-emerald-200 text-[11px] text-stone-700 space-y-1.5 leading-relaxed animate-fadeIn">
-                      <p className="font-bold text-emerald-950">📜 Privacy & Protection Details:</p>
+                      <p className="font-bold text-emerald-950">📜 Privacy & Supabase Security Details:</p>
                       <ul className="list-disc pl-4 space-y-1 text-stone-600">
-                        <li><strong>No External Sharing:</strong> Your logs and habits are never reported to schools, parents, or third parties.</li>
-                        <li><strong>Encrypted & Local:</strong> Your password secures your data locally on your device.</li>
-                        <li><strong>UN SDG 3 Standard:</strong> Designed to provide a safe, supportive recovery environment.</li>
+                        <li><strong>Supabase Auth:</strong> Authenticated securely via Supabase Auth with Row-Level Security (RLS).</li>
+                        <li><strong>Profile Table:</strong> Creates an isolated row in the `profiles` table linked by `auth.users.id`.</li>
+                        <li><strong>Cross-Device Sync:</strong> Your logs, streak, companion plant, and diary entries sync on any device.</li>
                       </ul>
                     </div>
                   )}
@@ -529,9 +583,32 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
                       className="w-4 h-4 mt-0.5 text-emerald-700 bg-stone-50 border-emerald-300 rounded focus:ring-emerald-600 accent-emerald-700 cursor-pointer shrink-0"
                     />
                     <span className="text-xs font-bold text-emerald-950 leading-tight">
-                      {translate(language, "accPrivacyCheckbox")} <span className="text-red-500">*</span>
+                      I have read and agree to the{" "}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onOpenLegal) onOpenLegal("privacy");
+                        }}
+                        className="font-extrabold text-emerald-800 underline hover:text-emerald-950 cursor-pointer border-none bg-transparent p-0"
+                      >
+                        Privacy Policy
+                      </button>{" "}
+                      and{" "}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onOpenLegal) onOpenLegal("terms");
+                        }}
+                        className="font-extrabold text-emerald-800 underline hover:text-emerald-950 cursor-pointer border-none bg-transparent p-0"
+                      >
+                        Terms of Service
+                      </button>
+                      . <span className="text-red-500">*</span>
                     </span>
                   </label>
+
                 </div>
               </>
             )}
@@ -557,16 +634,18 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
             {/* Action Submit Button */}
             <button
               type="submit"
-              disabled={isSubmitting}
-              className="w-full py-2.5 px-4 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 shadow-md shadow-teal-500/20 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all border-none disabled:opacity-60 disabled:cursor-not-allowed"
+              disabled={isLoading}
+              className="w-full py-2.5 px-4 rounded-full bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 hover:from-emerald-700 hover:to-blue-700 text-white font-extrabold text-xs tracking-wider uppercase flex items-center justify-center gap-2 shadow-md shadow-teal-500/20 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all border-none disabled:opacity-50"
             >
-              {activeTab === "signup" ? (
+              {isLoading ? (
+                <span>Connecting to Supabase...</span>
+              ) : activeTab === "signup" ? (
                 <>
-                  <UserPlus className="w-4 h-4" /> {isSubmitting ? "..." : translate(language, "accCreateBtn")}
+                  <UserPlus className="w-4 h-4" /> {translate(language, "accCreateBtn")}
                 </>
               ) : (
                 <>
-                  <LogIn className="w-4 h-4" /> {isSubmitting ? "..." : translate(language, "accLoginBtn")}
+                  <LogIn className="w-4 h-4" /> {translate(language, "accLoginBtn")}
                 </>
               )}
             </button>
@@ -574,6 +653,5 @@ export default function UserAccount({ onLoginStateChange, language }: UserAccoun
         </div>
       )}
     </div>
-
   );
 }

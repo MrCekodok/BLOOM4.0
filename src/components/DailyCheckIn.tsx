@@ -4,6 +4,177 @@ import { HabitType, LogEntry } from "../types";
 import { Language, translate } from "../translations";
 import { HealthQuestType } from "./HealthQuestsModal";
 
+interface RecommendedQuestInfo {
+  type: HealthQuestType;
+  icon: string;
+  name: Record<Language, string>;
+  whyItRelieves: Record<Language, string>;
+  buttonText: Record<Language, string>;
+  secondaryType?: HealthQuestType;
+  secondaryName?: Record<Language, string>;
+}
+
+function getRecommendedQuest(reason: string): RecommendedQuestInfo {
+  const lower = (reason || "").toLowerCase().trim();
+
+  const isStress = /stress|anxiety|exam|work|pressure|angry|anger|tekanan|stres|学业|压力|考试|工作|生气|怒|스트레스|시험|업무|불안/.test(lower);
+  const isBored = /bored|boredom|idle|free|nothing|tired|fatigue|bosan|penat|无聊|空闲|累|疲劳|지루|심심|피곤/.test(lower);
+  const isMeal = /meal|eat|food|coffee|drink|makan|kopi|minum|饭|吃|咖啡|茶|食|식사|커피|밥|음료/.test(lower);
+  const isSocial = /friend|peer|party|social|club|gathering|rakan|kawan|pesta|朋友|聚会|同辈|社交|친구|모임|술자리/.test(lower);
+
+  if (isStress) {
+    return {
+      type: "breathing",
+      icon: "🫁",
+      name: {
+        en: "4-7-8 Stress Relieving Breath",
+        ms: "Nafas Pelepasan Stres 4-7-8",
+        zh: "4-7-8 舒压深呼吸",
+        ko: "4-7-8 스트레스 해소 호흡"
+      },
+      whyItRelieves: {
+        en: "Relieves acute stress & anxiety by stimulating the vagus nerve, rapidly lowering cortisol and heart rate in 60 seconds.",
+        ms: "Melegakan stres & kegelisahan dengan merangsang saraf vagus untuk menurunkan kortisol dan degupan jantung dalam 60 saat.",
+        zh: "通过深呼吸直接刺激迷走神经，在 60 秒内降低心率与压力激素（皮质醇），平复引发吸食的紧张与压力。",
+        ko: "미경신경을 자극하여 60초 내에 심박수와 스트레스 호르몬(코르티솔)을 낮춤으로써 흡연 욕구를 유발한 스트레스를 해소합니다."
+      },
+      buttonText: {
+        en: "Start 4-7-8 Breathing Exercise 🫁",
+        ms: "Mula Senaman Nafas 4-7-8 🫁",
+        zh: "开始 4-7-8 舒压呼吸 🫁",
+        ko: "4-7-8 호흡 운동 시작 🫁"
+      },
+      secondaryType: "grounding",
+      secondaryName: {
+        en: "5-4-3-2-1 Sensory Grounding",
+        ms: "Penenangan Deria 5-4-3-2-1",
+        zh: "5-4-3-2-1 感官着陆",
+        ko: "5-4-3-2-1 감각 그라운딩"
+      }
+    };
+  }
+
+  if (isBored) {
+    return {
+      type: "shakeout",
+      icon: "⚡",
+      name: {
+        en: "2-Min Dopamine Shakeout & Stretch",
+        ms: "Senaman Dopamin & Regangan 2-Minit",
+        zh: "2分钟多巴胺激活与拉伸",
+        ko: "2분 도파민 활성 & 스트레칭"
+      },
+      whyItRelieves: {
+        en: "Relieves boredom & fatigue by releasing natural dopamine and physically replacing the hand-to-mouth craving habit.",
+        ms: "Melegakan kebosanan & keletihan dengan membebaskan dopamin semula jadi dan memutus pergerakan tangan-ke-mulut.",
+        zh: "通过全身肌肉拉伸释放自然多巴胺，填补脑部渴望，完美物理替代手到嘴的机械吸食习惯。",
+        ko: "전신 스트레칭을 통해 천연 도파민을 분비하여 무의식적인 손-입 동작 습관을 완벽히 대체하고 지루함을 없앱니다."
+      },
+      buttonText: {
+        en: "Start 2-Min Dopamine Shake ⚡",
+        ms: "Mula Senaman 2-Minit ⚡",
+        zh: "开始 2分钟多巴胺激活 ⚡",
+        ko: "2분 도파민 리셋 시작 ⚡"
+      },
+      secondaryType: "walking",
+      secondaryName: {
+        en: "10-Min Walk",
+        ms: "Jalan 10-Minit",
+        zh: "10分钟散步",
+        ko: "10분 산책"
+      }
+    };
+  }
+
+  if (isMeal) {
+    return {
+      type: "hydration",
+      icon: "💧",
+      name: {
+        en: "Cool Water Palate Cleanser",
+        ms: "Pembersih Air Sejuk & Tembuni",
+        zh: "冰水口感重置与水疗",
+        ko: "시원한 수분 보충 & 입안 리셋"
+      },
+      whyItRelieves: {
+        en: "Relieves post-meal & coffee habit loops by cleansing taste receptors and accelerating nicotine toxin clearance.",
+        ms: "Melegakan tabiat selepas makan dengan menetapkan semula reseptor rasa dan mempercepatkan pembuangan toksin nikotin.",
+        zh: "刷新口腔味觉受体，重置餐后/饮品后的习惯性口唇渴望，并加速体内残留尼古丁毒素的代谢。",
+        ko: "구강 미각 수용체를 깨끗이 리셋하여 식후/커피 후 습관성 갈망을 차단하고 니코틴 독소 배출을 돕습니다."
+      },
+      buttonText: {
+        en: "Start Hydration Quest 💧",
+        ms: "Mula Misi Minum Air 💧",
+        zh: "开始补水清肺 💧",
+        ko: "수분 보충 퀘스트 시작 💧"
+      }
+    };
+  }
+
+  if (isSocial) {
+    return {
+      type: "walking",
+      icon: "🚶‍♂️",
+      name: {
+        en: "10-Min Environment Reset Walk",
+        ms: "Jalan 10-Minit Tukar Suasana",
+        zh: "10分钟环境换气与换景",
+        ko: "10분 환경 리셋 산책"
+      },
+      whyItRelieves: {
+        en: "Relieves social pressure & peer triggers by stepping away, filling your lungs with fresh air, and resetting your focus.",
+        ms: "Melegakan tekanan sosial dengan melangkah keluar dari persekitaran pencetus untuk mendapatkan udara segar.",
+        zh: "拉开与吸烟聚会/同辈圈的物理距离，用新鲜空气理气，摆脱视听线索诱发的吸食模仿冲动。",
+        ko: "흡연 모임 공간에서 잠시 벗어나 신선한 공기를 마시고 흡연 유혹의 시각적 자극을 물리적으로 차단합니다."
+      },
+      buttonText: {
+        en: "Start 10-Min Walk 🚶‍♂️",
+        ms: "Mula Jalan 10-Minit 🚶‍♂️",
+        zh: "开始 10分钟散步 🚶‍♂️",
+        ko: "10분 산책 시작 🚶‍♂️"
+      },
+      secondaryType: "hydration",
+      secondaryName: {
+        en: "Hold Ice Water",
+        ms: "Pegang Air Ais",
+        zh: "手握冰镇水",
+        ko: "찬 음료 보충"
+      }
+    };
+  }
+
+  // Default / General Craving
+  return {
+    type: "breathing",
+    icon: "🫁",
+    name: {
+      en: "Targeted Craving Relief Breath (4-7-8)",
+      ms: "Nafas Pelepasan Keinginan (4-7-8)",
+      zh: "定向欲望舒缓呼吸 (4-7-8)",
+      ko: "갈망 해소 맞춤 호흡 (4-7-8)"
+    },
+    whyItRelieves: {
+      en: "Relieves acute craving spikes by regulating oxygen intake and shifting your body out of trigger-driven stress mode.",
+      ms: "Melegakan gelombang keinginan dengan mengawal bekalan oksigen dan mengalihkan badan dari mod pencetus.",
+      zh: "通过规律呼吸重置体内氧气平衡，安全陪伴你渡过尼古丁生理渴望的最强高峰期（3-5分钟）。",
+      ko: "산소 공급을 조절하여 유발 원인으로 급증한 니코틴 갈망 피크를 3~5분 내로 가라앉힙니다."
+    },
+    buttonText: {
+      en: "Start Relief Breathing Exercise 🫁",
+      ms: "Mula Senaman Nafas Pemulihan 🫁",
+      zh: "开始定向舒缓呼吸 🫁",
+      ko: "맞춤 호흡 운동 시작 🫁"
+    },
+    secondaryType: "hydration",
+    secondaryName: {
+      en: "Cool Water Flush",
+      ms: "Bilas Air Sejuk",
+      zh: "冰水清肺",
+      ko: "시원한 수분 보충"
+    }
+  };
+}
+
 interface DailyCheckInProps {
   onLogAdded: (entry: LogEntry) => void;
   currentLogs: LogEntry[];
@@ -644,59 +815,80 @@ export default function DailyCheckIn({ onLogAdded, currentLogs, language, active
                 </div>
               </div>
 
-              {/* Immediate Post-Smoke & Vape Health Quests Card */}
-              {onOpenHealthQuest && (
-                <div className="bg-gradient-to-r from-emerald-900 via-teal-900 to-blue-950 p-3.5 sm:p-4 rounded-2xl text-white border border-teal-700/80 shadow-md">
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-lg">🫁</span>
-                      <span className="text-xs sm:text-sm font-serif font-black tracking-tight text-emerald-100">
-                        {language === "zh" ? "开启健康任务" : language === "ms" ? "Misi Kesihatan" : language === "ko" ? "건강 퀘스트" : "Health Quests"}
+              {/* Targeted Post-Smoke & Vape Health Quest Card */}
+              {onOpenHealthQuest && (() => {
+                const questInfo = getRecommendedQuest(reasonText);
+                const lang = (language in questInfo.name ? language : "en") as Language;
+
+                return (
+                  <div className="bg-gradient-to-br from-emerald-950 via-teal-950 to-slate-900 p-3.5 sm:p-4 rounded-2xl text-white border border-teal-600/60 shadow-lg relative overflow-hidden">
+                    {/* Background glow */}
+                    <div className="absolute -right-6 -bottom-6 w-28 h-28 bg-teal-500/10 rounded-full blur-xl pointer-events-none" />
+
+                    {/* Header */}
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl sm:text-2xl">{questInfo.icon}</span>
+                        <div>
+                          <span className="text-[10px] sm:text-xs font-black uppercase tracking-wider text-amber-300 block">
+                            {lang === "zh" ? "针对您的诱因推荐" : lang === "ms" ? "Disyorkan Untuk Pencetus Anda" : lang === "ko" ? "원인 맞춤 추천 퀘스트" : "Targeted Health Quest"}
+                          </span>
+                          <h4 className="text-xs sm:text-sm md:text-base font-serif font-black text-white leading-tight">
+                            {questInfo.name[lang] || questInfo.name.en}
+                          </h4>
+                        </div>
+                      </div>
+                      <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-700/80 text-emerald-100 px-2.5 py-0.5 rounded-full shrink-0">
+                        {lang === "zh" ? "定向舒缓" : lang === "ms" ? "Terarah" : lang === "ko" ? "맞춤 해소" : "Targeted"}
                       </span>
                     </div>
-                    <span className="text-[10px] font-black uppercase tracking-wider bg-emerald-700/80 text-emerald-100 px-2 py-0.5 rounded-full">
-                      {language === "zh" ? "舒缓戒断" : language === "ms" ? "Pemulihan" : language === "ko" ? "회복" : "Recovery"}
-                    </span>
+
+                    {/* Explanation Box: WHY it relieves the problem */}
+                    <div className="my-2 p-2.5 sm:p-3 rounded-xl bg-teal-900/60 border border-teal-700/50 text-xs text-teal-100 leading-relaxed font-medium">
+                      <div className="font-bold text-amber-300 text-[10px] sm:text-[11px] uppercase tracking-wider mb-1 flex items-center gap-1">
+                        <span>💡</span>
+                        <span>
+                          {lang === "zh" ? "为何此练习能解决您的具体难题？" : lang === "ms" ? "Mengapa Senaman Ini Melegakan Masalah Anda?" : lang === "ko" ? "이 운동이 문제를 해소하는 이유" : "Why This Relieves Your Specific Problem:"}
+                        </span>
+                      </div>
+                      <p className="text-emerald-100/90 text-xs sm:text-sm font-medium leading-relaxed">
+                        {questInfo.whyItRelieves[lang] || questInfo.whyItRelieves.en}
+                      </p>
+                    </div>
+
+                    {/* Action Button */}
+                    <div className="flex flex-col sm:flex-row gap-2 mt-2.5">
+                      <button
+                        type="button"
+                        onClick={() => onOpenHealthQuest(questInfo.type)}
+                        className="flex-1 py-2.5 px-4 bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-400 hover:from-emerald-400 hover:to-teal-300 text-slate-950 font-black text-xs sm:text-sm rounded-xl flex items-center justify-center gap-2 shadow-md cursor-pointer transition-all hover:scale-[1.02] active:scale-98 border-none"
+                      >
+                        <span>{questInfo.buttonText[lang] || questInfo.buttonText.en}</span>
+                        <ArrowRight className="w-4 h-4 shrink-0" />
+                      </button>
+
+                      {questInfo.secondaryType && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenHealthQuest(questInfo.secondaryType)}
+                          className="py-2 px-3 bg-teal-900/80 hover:bg-teal-800 border border-teal-700/80 text-teal-200 hover:text-white font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-95 shrink-0"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-amber-300" />
+                          <span>
+                            {lang === "zh"
+                              ? `备选: ${questInfo.secondaryName?.[lang] || ""}`
+                              : lang === "ms"
+                              ? `Pilihan: ${questInfo.secondaryName?.[lang] || ""}`
+                              : lang === "ko"
+                              ? `대안: ${questInfo.secondaryName?.[lang] || ""}`
+                              : `Alt: ${questInfo.secondaryName?.[lang] || ""}`}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <p className="text-[11px] text-emerald-200/90 font-medium mb-2.5 leading-snug">
-                    {language === "zh" ? "选择一项快速练习，帮助肺部理气并缓解渴望：" : language === "ms" ? "Pilih senaman ringkas untuk menyegarkan paru-paru & mengawal tumpuan:" : language === "ko" ? "폐를 정화하고 마음을 정돈하는 퀘스트를 선택하세요:" : "Try a quick exercise to refresh your lungs and stay focused:"}
-                  </p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onOpenHealthQuest("breathing")}
-                      className="px-2.5 py-1.5 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 rounded-xl text-[11px] font-bold text-white flex items-center justify-center gap-1 transition-all cursor-pointer shadow-xs active:scale-95"
-                    >
-                      <span>🫁</span>
-                      <span>{language === "zh" ? "4-7-8 呼吸" : language === "ms" ? "Nafas 4-7-8" : language === "ko" ? "4-7-8 호흡" : "4-7-8 Breath"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenHealthQuest("walking")}
-                      className="px-2.5 py-1.5 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 rounded-xl text-[11px] font-bold text-white flex items-center justify-center gap-1 transition-all cursor-pointer shadow-xs active:scale-95"
-                    >
-                      <Footprints className="w-3.5 h-3.5 text-amber-300" />
-                      <span>{language === "zh" ? "10分钟散步" : language === "ms" ? "Jalan 10m" : language === "ko" ? "10분 산책" : "10-Min Walk"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenHealthQuest("hydration")}
-                      className="px-2.5 py-1.5 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 rounded-xl text-[11px] font-bold text-white flex items-center justify-center gap-1 transition-all cursor-pointer shadow-xs active:scale-95"
-                    >
-                      <Droplets className="w-3.5 h-3.5 text-teal-300" />
-                      <span>{language === "zh" ? "补水清肺" : language === "ms" ? "Minum Air" : language === "ko" ? "수분 보충" : "Hydration"}</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onOpenHealthQuest("shakeout")}
-                      className="px-2.5 py-1.5 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 rounded-xl text-[11px] font-bold text-white flex items-center justify-center gap-1 transition-all cursor-pointer shadow-xs active:scale-95"
-                    >
-                      <Activity className="w-3.5 h-3.5 text-rose-300" />
-                      <span>{language === "zh" ? "2分钟活力" : language === "ms" ? "Senaman 2m" : language === "ko" ? "2분 리셋" : "2-Min Shake"}</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               <div className="flex items-center justify-between pt-3 border-t border-stone-100">
                 <p className="text-[10px] sm:text-xs text-emerald-800/80 font-bold select-none">

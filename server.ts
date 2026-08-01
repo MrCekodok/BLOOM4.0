@@ -1,5 +1,6 @@
 import express from "express";
 import path from "path";
+import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 import dotenv from "dotenv";
 import fs from "fs";
@@ -7,9 +8,7 @@ import webPush from "web-push";
 
 dotenv.config();
 
-const DB_FILE = process.env.VERCEL
-  ? path.join("/tmp", "bloom-db.json")
-  : path.join(process.cwd(), "bloom-db.json");
+const DB_FILE = path.join(process.cwd(), "bloom-db.json");
 
 // Helper to load database
 function loadDB() {
@@ -313,8 +312,9 @@ When ${trigger} occurs in the future, activate the **5-Minute Delay Rule**:
 Physical nicotine cravings peak in intensity for only 3 to 5 minutes. Delaying with sensory input allows the chemical craving wave to naturally collapse without giving in.`;
 }
 
-function createApp() {
+async function startServer() {
   const app = express();
+  const PORT = 3000;
 
   // Ensure VAPID keys on startup
   const startupDb = loadDB();
@@ -387,6 +387,72 @@ function createApp() {
       notificationSettings: userPayload.notificationSettings || null
     });
   });
+
+  // 2B. UPDATE PROFILE ENDPOINT
+  app.post("/api/auth/update-profile", (req, res) => {
+    const { currentUsername, newUsername, newPassword, newEmail } = req.body;
+    if (!currentUsername) {
+      return res.status(400).json({ error: "Current username required" });
+    }
+
+    const db = loadDB();
+    const oldKey = currentUsername.toLowerCase().trim();
+
+    if (!db.users[oldKey]) {
+      return res.status(404).json({ error: "User account not found" });
+    }
+
+    let finalUsername = currentUsername;
+
+    // If changing username
+    if (newUsername && newUsername.trim() && newUsername.toLowerCase().trim() !== oldKey) {
+      const newKey = newUsername.toLowerCase().trim();
+      if (db.users[newKey]) {
+        return res.status(400).json({ error: "New username is already taken" });
+      }
+      // Migrate credentials and data
+      db.users[newKey] = newPassword || db.users[oldKey];
+      db.userData[newKey] = db.userData[oldKey] || { logs: [], journals: [] };
+      if (newEmail) db.userData[newKey].email = newEmail;
+
+      delete db.users[oldKey];
+      delete db.userData[oldKey];
+      finalUsername = newUsername.trim();
+    } else {
+      if (newPassword && newPassword.length >= 6) {
+        db.users[oldKey] = newPassword;
+      }
+      if (newEmail) {
+        db.userData[oldKey] = db.userData[oldKey] || {};
+        db.userData[oldKey].email = newEmail;
+      }
+    }
+
+    saveDB(db);
+    res.json({ success: true, username: finalUsername });
+  });
+
+  // 2C. DELETE ACCOUNT ENDPOINT
+  app.post("/api/auth/delete-account", (req, res) => {
+    const { username } = req.body;
+    if (!username) {
+      return res.status(400).json({ error: "Username required" });
+    }
+
+    const db = loadDB();
+    const key = username.toLowerCase().trim();
+
+    if (db.users[key]) {
+      delete db.users[key];
+    }
+    if (db.userData[key]) {
+      delete db.userData[key];
+    }
+
+    saveDB(db);
+    res.json({ success: true, message: "Account and associated data deleted." });
+  });
+
 
   // 3. SYNC PUSH ENDPOINT
   app.post("/api/sync/push", (req, res) => {
@@ -727,112 +793,100 @@ self.addEventListener('notificationclick', function(event) {
     `);
   });
 
-  return app;
-}
+  // Background notification check-in job (every 60 seconds)
+  setInterval(() => {
+    try {
+      const db = loadDB();
+      const now = new Date();
 
-const app = createApp();
-export default app;
+      Object.keys(db.userData).forEach(async (usernameKey) => {
+        const userPayload = db.userData[usernameKey];
+        const settings = userPayload?.notificationSettings;
 
-async function startServer() {
-  const PORT = 3000;
+        if (settings && settings.enabled === true && settings.subscription) {
+          const timezone = settings.timezone || "UTC";
+          try {
+            // Get local hour and minute in the user's specific timezone
+            const options = {
+              timeZone: timezone,
+              hour: 'numeric',
+              minute: 'numeric',
+              hour12: false
+            } as const;
+            
+            const formatter = new Intl.DateTimeFormat('en-US', options);
+            const parts = formatter.formatToParts(now);
+            const hourVal = parts.find(p => p.type === 'hour')?.value;
+            const minVal = parts.find(p => p.type === 'minute')?.value;
 
-  // Background notification check-in job (every 60 seconds) — local/long-running only
-  if (!process.env.VERCEL) {
-    setInterval(() => {
-      try {
-        const db = loadDB();
-        const now = new Date();
-
-        Object.keys(db.userData).forEach(async (usernameKey) => {
-          const userPayload = db.userData[usernameKey];
-          const settings = userPayload?.notificationSettings;
-
-          if (settings && settings.enabled === true && settings.subscription) {
-            const timezone = settings.timezone || "UTC";
-            try {
-              // Get local hour and minute in the user's specific timezone
-              const options = {
-                timeZone: timezone,
-                hour: 'numeric',
-                minute: 'numeric',
-                hour12: false
-              } as const;
+            if (hourVal && minVal) {
+              const localTimeStr = `${hourVal.padStart(2, "0")}:${minVal.padStart(2, "0")}`; // "HH:MM"
               
-              const formatter = new Intl.DateTimeFormat('en-US', options);
-              const parts = formatter.formatToParts(now);
-              const hourVal = parts.find(p => p.type === 'hour')?.value;
-              const minVal = parts.find(p => p.type === 'minute')?.value;
+              if (localTimeStr === settings.time) {
+                // Get local date in their timezone to check if already sent today
+                const dateOptions = {
+                  timeZone: timezone,
+                  year: 'numeric',
+                  month: 'numeric',
+                  day: 'numeric'
+                } as const;
+                const dateFormatter = new Intl.DateTimeFormat('en-US', dateOptions);
+                const localDateStr = dateFormatter.format(now); // e.g. "7/20/2026"
 
-              if (hourVal && minVal) {
-                const localTimeStr = `${hourVal.padStart(2, "0")}:${minVal.padStart(2, "0")}`; // "HH:MM"
-                
-                if (localTimeStr === settings.time) {
-                  // Get local date in their timezone to check if already sent today
-                  const dateOptions = {
-                    timeZone: timezone,
-                    year: 'numeric',
-                    month: 'numeric',
-                    day: 'numeric'
-                  } as const;
-                  const dateFormatter = new Intl.DateTimeFormat('en-US', dateOptions);
-                  const localDateStr = dateFormatter.format(now); // e.g. "7/20/2026"
+                if (settings.lastSentDate !== localDateStr) {
+                  // Message choices:
+                  const messages = [
+                    "🌱 Time for your daily Bloom check-in!",
+                    "🌸 Keep your streak growing—visit Bloom today!",
+                    "💧 Take a moment to care for yourself today."
+                  ];
+                  const randomMsg = messages[Math.floor(Math.random() * messages.length)];
 
-                  if (settings.lastSentDate !== localDateStr) {
-                    // Message choices:
-                    const messages = [
-                      "🌱 Time for your daily Bloom check-in!",
-                      "🌸 Keep your streak growing—visit Bloom today!",
-                      "💧 Take a moment to care for yourself today."
-                    ];
-                    const randomMsg = messages[Math.floor(Math.random() * messages.length)];
+                  const payload = JSON.stringify({
+                    title: "Bloom Daily Check-in 🌸",
+                    body: randomMsg,
+                    data: { url: "/" }
+                  });
 
-                    const payload = JSON.stringify({
-                      title: "Bloom Daily Check-in 🌸",
-                      body: randomMsg,
-                      data: { url: "/" }
-                    });
+                  // Update database immediately before sending to prevent double-sends
+                  settings.lastSentDate = localDateStr;
+                  userPayload.notificationSettings = settings;
+                  saveDB(db);
 
-                    // Update database immediately before sending to prevent double-sends
-                    settings.lastSentDate = localDateStr;
-                    userPayload.notificationSettings = settings;
-                    saveDB(db);
-
-                    try {
-                      await webPush.sendNotification(settings.subscription, payload);
-                      console.log(`Successfully sent scheduled daily notification to user ${usernameKey}`);
-                    } catch (pushErr: any) {
-                      console.error(`Error sending push notification to user ${usernameKey}:`, pushErr);
-                      // Handle expired subscription (410 Gone / 404 Not Found)
-                      if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
-                        console.log(`Subscription for user ${usernameKey} is inactive. Disabling daily reminders.`);
-                        settings.enabled = false;
-                        userPayload.notificationSettings = settings;
-                        saveDB(db);
-                      }
+                  try {
+                    await webPush.sendNotification(settings.subscription, payload);
+                    console.log(`Successfully sent scheduled daily notification to user ${usernameKey}`);
+                  } catch (pushErr: any) {
+                    console.error(`Error sending push notification to user ${usernameKey}:`, pushErr);
+                    // Handle expired subscription (410 Gone / 404 Not Found)
+                    if (pushErr.statusCode === 410 || pushErr.statusCode === 404) {
+                      console.log(`Subscription for user ${usernameKey} is inactive. Disabling daily reminders.`);
+                      settings.enabled = false;
+                      userPayload.notificationSettings = settings;
+                      saveDB(db);
                     }
                   }
                 }
               }
-            } catch (tzErr) {
-              console.error(`Timezone formatting error for user ${usernameKey} with timezone ${timezone}:`, tzErr);
             }
+          } catch (tzErr) {
+            console.error(`Timezone formatting error for user ${usernameKey} with timezone ${timezone}:`, tzErr);
           }
-        });
-      } catch (dbErr) {
-        console.error("Error in background check-in timer job:", dbErr);
-      }
-    }, 60000); // every 1 minute
-  }
+        }
+      });
+    } catch (dbErr) {
+      console.error("Error in background check-in timer job:", dbErr);
+    }
+  }, 60000); // every 1 minute
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
-  } else if (!process.env.VERCEL) {
+  } else {
     const distPath = path.join(process.cwd(), 'dist');
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
@@ -840,13 +894,9 @@ async function startServer() {
     });
   }
 
-  if (!process.env.VERCEL) {
-    app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Bloom Server running on http://localhost:${PORT}`);
-    });
-  }
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Bloom Server running on http://localhost:${PORT}`);
+  });
 }
 
-if (!process.env.VERCEL) {
-  startServer();
-}
+startServer();
