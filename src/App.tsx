@@ -14,6 +14,7 @@ import SmokingProfileSetup from "./components/SmokingProfileSetup";
 import UrgeQuestModal from "./components/UrgeQuestModal";
 import TourGuide from "./components/TourGuide";
 import LanguageSelector from "./components/LanguageSelector";
+import CopyrightFooter from "./components/CopyrightFooter";
 import HealthQuestsModal, { HealthQuestType } from "./components/HealthQuestsModal";
 import ThemeSelectorModal from "./components/ThemeSelectorModal";
 import { getStoredTheme, applyTheme, ThemeId } from "./theme";
@@ -1388,6 +1389,8 @@ export default function App() {
 
       {/* Floating Lower-Right Language Selector */}
       <LanguageSelector currentLanguage={language} onSelectLanguage={handleLanguageChange} />
+
+      <CopyrightFooter />
  
     </div>
   );
