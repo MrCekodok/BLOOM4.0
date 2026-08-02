@@ -141,9 +141,7 @@ export default function WeeklyInsightsCard({
           </div>
           <div className="min-w-0">
             <h3 className="text-lg font-serif font-black text-stone-900 tracking-tight">
-              {tab === "week"
-                ? translate(language, "weekInsightsTitle")
-                : translate(language, "monthInsightsTitle")}
+              {translate(language, "weekInsightsTitle")}
             </h3>
             <p className="text-xs text-stone-500 font-medium">
               {tab === "week"
