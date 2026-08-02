@@ -297,14 +297,39 @@ export default function DailyCheckIn({ onLogAdded, currentLogs, language, active
     setStep("ask_reason");
   };
 
+  const getLocalFallbackSolution = (habit: string, reason: string, lang: Language): string => {
+    const trigger = reason.trim() ? `"${reason.trim()}"` : "this trigger";
+    const lower = reason.toLowerCase();
+    const isStress = /stress|anxiety|exam|work|pressure|angry|anger|tekanan|stres|学业|压力|考试|工作|生气|怒|스트레스|시험|업무/.test(lower);
+
+    if (lang === "ms") {
+      if (isStress) {
+        return `### 🩺 Bimbingan Pemulihan Pakar (Tekanan)\n\n**Punca**: Dicetuskan oleh ${trigger}.\n\n**🎯 Tindakan Masa Hadapan Khusus**:\n1. Alirkan air sejuk pada pergelangan tangan selama 30 saat.\n2. Lakukan 4 kali pernafasan 4-7-8 (tarik 4s, tahan 7s, hembus 8s).\n\n**💡 Mengapa Ia Berkesan**: Air sejuk dan pernafasan dalam menurunkan kortisol serta dorongan nikotin dalam masa singkat.`;
+      }
+      return `### 🩺 Bimbingan Pemulihan Pakar\n\n**Punca**: Dicetuskan oleh ${trigger} (${habit}).\n\n**🎯 Tindakan Masa Hadapan Khusus**:\n1. Minum 200ml air sejuk dan kunyah pudina.\n2. Tangguh 5 minit sebelum membuat sebarang keputusan.\n\n**💡 Mengapa Ia Berkesan**: Gelombang keinginan nikotin biasanya surut dalam 3–5 minit.`;
+    }
+
+    if (isStress) {
+      return `### 🩺 Clinical Cessation Advisory (Stress)\n\n**Trigger Analysis**: Cravings triggered by ${trigger} are acute stress responses.\n\n**🎯 Specific Future Action**:\n1. Run cold water over both wrists for 30 seconds.\n2. Perform 4 cycles of 4-7-8 breathing (inhale 4s, hold 7s, exhale 8s).\n\n**💡 Why It Works**: Cold water plus slow breathing lowers cortisol and interrupts the nicotine urge loop within about 45 seconds.`;
+    }
+
+    return `### 🩺 Clinical Cessation Advisory\n\n**Trigger Analysis**: Craving linked to ${trigger} (${habit}).\n\n**🎯 Specific Future Action**:\n1. Drink a glass of cold water and chew mint gum.\n2. Use the 5-minute delay rule before acting on the urge.\n\n**💡 Why It Works**: Nicotine craving waves usually peak and fade within 3–5 minutes.`;
+  };
+
   const submitReason = async () => {
     if (!reasonText.trim()) {
       setErrorText(translate(language, "checkInErrWord"));
       return;
     }
-    
+    if (!selectedHabit) {
+      setErrorText(translate(language, "checkInErrServer"));
+      return;
+    }
+
     setErrorText("");
     setStep("loading");
+
+    let solutionText = "";
 
     try {
       const response = await fetch("/api/bloom-solution", {
@@ -317,35 +342,34 @@ export default function DailyCheckIn({ onLogAdded, currentLogs, language, active
         }),
       });
 
-      if (!response.ok) {
-        throw new Error("Failed to consult Bloom expert.");
-      }
-
-      const data = await response.json();
-      const solutionText = data.solution;
-      setGeneratedSolution(solutionText);
-
-      // Save log entry with quantity & trigger reason
-      const today = currentDateStr;
-      const entry: LogEntry = {
-        id: `log-${Date.now()}`,
-        date: today,
-        habit: selectedHabit!,
-        consumed: true,
-        quantity: quantity,
-        reason: reasonText,
-        solution: solutionText,
-        timestamp: new Date().toISOString()
-      };
-      
-      onLogAdded(entry);
-      setDidConsume(true);
-      setStep("solution");
+      const data = await response.json().catch(() => ({} as { solution?: string }));
+      solutionText = (data.solution || "").trim();
     } catch (err: any) {
       console.error(err);
-      setErrorText(translate(language, "checkInErrServer"));
-      setStep("ask_reason");
     }
+
+    // Always deliver a solution — use local fallback if the API is unavailable
+    if (!solutionText) {
+      solutionText = getLocalFallbackSolution(selectedHabit, reasonText, language);
+    }
+
+    setGeneratedSolution(solutionText);
+
+    const today = currentDateStr;
+    const entry: LogEntry = {
+      id: `log-${Date.now()}`,
+      date: today,
+      habit: selectedHabit,
+      consumed: true,
+      quantity: quantity,
+      reason: reasonText,
+      solution: solutionText,
+      timestamp: new Date().toISOString()
+    };
+
+    onLogAdded(entry);
+    setDidConsume(true);
+    setStep("solution");
   };
 
   // Helper to convert Markdown to basic JSX tags cleanly to avoid npm depend issues

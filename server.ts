@@ -6,7 +6,8 @@ import dotenv from "dotenv";
 import fs from "fs";
 import webPush from "web-push";
 
-dotenv.config();
+dotenv.config({ path: ".env" });
+dotenv.config({ path: ".env.local", override: true });
 
 const DB_FILE = path.join(process.cwd(), "bloom-db.json");
 
@@ -602,7 +603,11 @@ async function startServer() {
     try {
       const { habit, reason, lang } = req.body;
       if (!habit || !reason) {
-        return res.status(400).json({ error: "Missing habit or reason" });
+        return res.status(400).json({
+          error: "Missing habit or reason",
+          solution: getFallbackSolution(habit || "vape", reason || "", lang || "en"),
+          isFallback: true
+        });
       }
 
       const selectedLang = lang || "en";
