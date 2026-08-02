@@ -154,14 +154,10 @@ export async function signUpWithSupabase(
   error?: string;
 }> {
   const email = emailInput.trim();
-  const username = usernameInput.trim();
+  const username = (usernameInput.trim() || email.split("@")[0] || "user").trim();
 
   if (!email || !email.includes("@")) {
     return { success: false, error: "Please enter a valid email address." };
-  }
-
-  if (!username) {
-    return { success: false, error: "Please enter a username." };
   }
 
   if (!passwordInput || passwordInput.length < 6) {
@@ -212,7 +208,7 @@ export async function signUpWithSupabase(
  * Sign in user with Supabase Auth and fetch all saved data.
  */
 export async function signInWithSupabase(
-  emailOrUsername: string,
+  emailInput: string,
   passwordInput: string
 ): Promise<{
   success: boolean;
@@ -223,10 +219,10 @@ export async function signInWithSupabase(
   smokingProfile?: SmokingProfile | null;
   error?: string;
 }> {
-  const input = emailOrUsername.trim();
+  const email = emailInput.trim();
 
-  if (!input) {
-    return { success: false, error: "Please enter your email or username." };
+  if (!email || !email.includes("@")) {
+    return { success: false, error: "Please enter a valid email address." };
   }
 
   if (!isSupabaseConfigured()) {
@@ -237,27 +233,8 @@ export async function signInWithSupabase(
   }
 
   try {
-    // If input does not contain '@', check if username maps to an email or treat as format
-    let targetEmail = input;
-    if (!input.includes("@")) {
-      // Look up profile by username
-      const { data: foundProfile } = await supabase
-        .from("profiles")
-        .select("email, username")
-        .eq("username", input)
-        .maybeSingle();
-
-      if (foundProfile && foundProfile.email) {
-        targetEmail = foundProfile.email;
-      } else {
-        // Fallback email format for pure username accounts
-        targetEmail = `${input.toLowerCase()}@bloom.app`;
-      }
-    }
-
-    // Step 1: Authenticate with Supabase Auth
     const { data, error } = await supabase.auth.signInWithPassword({
-      email: targetEmail,
+      email,
       password: passwordInput
     });
 
@@ -270,22 +247,26 @@ export async function signInWithSupabase(
     }
 
     const userId = data.user.id;
+    const displayName =
+      data.user.user_metadata?.username || email.split("@")[0] || "user";
 
-    // Step 2: Retrieve profile
     const profileRes = await ensureUserProfile(
       userId,
-      data.user.email || targetEmail,
-      data.user.user_metadata?.username || input
+      data.user.email || email,
+      displayName
     );
 
-    // Step 3: Retrieve progress from user_data (logs / journals / smoking_profile)
     const cloud = await fetchUserDataFromSupabase(userId);
 
     return {
       success: true,
       user: data.user,
       profile: {
-        ...(profileRes.profile || { id: userId, username: input, created_at: new Date().toISOString() }),
+        ...(profileRes.profile || {
+          id: userId,
+          username: displayName,
+          created_at: new Date().toISOString()
+        }),
         smoking_profile: cloud.smokingProfile,
         seed_type: cloud.seedType
       },

@@ -22,7 +22,6 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
 
   const [activeTab, setActiveTab] = useState<"login" | "signup">("signup");
   const [email, setEmail] = useState("");
-  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -44,7 +43,6 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
 
   const clearInputs = () => {
     setEmail("");
-    setUsername("");
     setPassword("");
     setConfirmPassword("");
     setFeedback(null);
@@ -63,16 +61,12 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
       return;
     }
 
-    const trimmedUser = username.trim();
     const trimmedEmail = email.trim();
+    // Display name is derived from email — no separate username on signup
+    const trimmedUser = trimmedEmail.split("@")[0] || "user";
 
     if (!trimmedEmail || !trimmedEmail.includes("@")) {
       showFeedback("error", "Please enter a valid email address.");
-      return;
-    }
-
-    if (!trimmedUser) {
-      showFeedback("error", translate(language, "accErrUserEmpty"));
       return;
     }
 
@@ -142,7 +136,7 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
       if (usersRaw) {
         try { users = JSON.parse(usersRaw); } catch (e) {}
       }
-      users[trimmedUser.toLowerCase()] = password;
+      users[trimmedEmail.toLowerCase()] = password;
       localStorage.setItem("bloom_registered_users", JSON.stringify(users));
 
       setActiveTab("login");
@@ -160,9 +154,9 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
     e.preventDefault();
     setFeedback(null);
 
-    const loginInput = (username || email).trim();
-    if (!loginInput) {
-      showFeedback("error", translate(language, "accErrNoUser"));
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail || !trimmedEmail.includes("@")) {
+      showFeedback("error", "Please enter a valid email address.");
       return;
     }
 
@@ -176,7 +170,7 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
     try {
       // 1. Try Supabase Auth First
       if (isSupabaseConfigured()) {
-        const res = await signInWithSupabase(loginInput, password);
+        const res = await signInWithSupabase(trimmedEmail, password);
 
         if (!res.success) {
           setIsLoading(false);
@@ -184,7 +178,11 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
           return;
         }
 
-        const authenticatedUser = res.profile?.username || res.user?.user_metadata?.username || loginInput;
+        const authenticatedUser =
+          res.profile?.username ||
+          res.user?.user_metadata?.username ||
+          trimmedEmail.split("@")[0] ||
+          trimmedEmail;
         const userId = res.user?.id;
 
         // Sync cloud data retrieved from Supabase to local state & storage!
@@ -220,7 +218,7 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: loginInput, password })
+        body: JSON.stringify({ username: trimmedEmail, password })
       });
       const data = await res.json();
       setIsLoading(false);
@@ -230,19 +228,21 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
         return;
       }
 
+      const localUser = data.username || trimmedEmail.split("@")[0] || trimmedEmail;
+
       if (data.logs) {
-        localStorage.setItem(`bloom_recovery_logs_v4_${data.username}`, JSON.stringify(data.logs));
+        localStorage.setItem(`bloom_recovery_logs_v4_${localUser}`, JSON.stringify(data.logs));
       }
       if (data.journals) {
-        localStorage.setItem(`bloom_journal_entries_v4_${data.username}`, JSON.stringify(data.journals));
+        localStorage.setItem(`bloom_journal_entries_v4_${localUser}`, JSON.stringify(data.journals));
       }
 
-      localStorage.setItem("bloom_current_user", data.username);
+      localStorage.setItem("bloom_current_user", localUser);
       localStorage.setItem("bloom_current_page", "did_consume");
-      setCurrentUser(data.username);
-      if (onLoginStateChange) onLoginStateChange(data.username);
+      setCurrentUser(localUser);
+      if (onLoginStateChange) onLoginStateChange(localUser);
 
-      showFeedback("success", translate(language, "accSuccessLogin", { username: data.username }));
+      showFeedback("success", translate(language, "accSuccessLogin", { username: localUser }));
       clearInputs();
 
       setTimeout(() => {
@@ -257,13 +257,14 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
       if (usersRaw) {
         try { users = JSON.parse(usersRaw); } catch (e) {}
       }
-      const savedPassword = users[loginInput.toLowerCase()];
+      const savedPassword = users[trimmedEmail.toLowerCase()];
       if (savedPassword && savedPassword === password) {
-        localStorage.setItem("bloom_current_user", loginInput);
+        const localUser = trimmedEmail.split("@")[0] || trimmedEmail;
+        localStorage.setItem("bloom_current_user", localUser);
         localStorage.setItem("bloom_current_page", "did_consume");
-        setCurrentUser(loginInput);
-        if (onLoginStateChange) onLoginStateChange(loginInput);
-        showFeedback("success", translate(language, "accSuccessLogin", { username: loginInput }));
+        setCurrentUser(localUser);
+        if (onLoginStateChange) onLoginStateChange(localUser);
+        showFeedback("success", translate(language, "accSuccessLogin", { username: localUser }));
         clearInputs();
       } else {
         showFeedback("error", "Failed to sign in. Please check connection or password.");
@@ -468,38 +469,20 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
 
           {/* Form */}
           <form onSubmit={activeTab === "signup" ? handleRegister : handleLogin} className="space-y-3">
-            
-            {/* Username / Login Identifier Input (FIRST) */}
+
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                <User className="w-4 h-4 text-emerald-900" />
+                <Mail className="w-4 h-4 text-emerald-900" />
               </div>
               <input
-                type="text"
+                type="email"
                 required
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder={activeTab === "signup" ? translate(language, "accChooseUser") : "Enter your email or username..."}
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Enter your email address..."
                 className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
               />
             </div>
-
-            {/* Email Input (UNDER Username for Supabase Auth Signup) */}
-            {activeTab === "signup" && (
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
-                  <Mail className="w-4 h-4 text-emerald-900" />
-                </div>
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="Enter your email address..."
-                  className="w-full pl-10 pr-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 text-xs text-emerald-950 placeholder:text-stone-500 focus:outline-none focus:ring-2 focus:ring-emerald-700/30 focus:bg-white/90 transition-all shadow-xs font-semibold backdrop-blur-xs"
-                />
-              </div>
-            )}
 
             {/* Password Input */}
             <div className="relative">
