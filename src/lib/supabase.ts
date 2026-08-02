@@ -31,7 +31,7 @@ export const supabase = createClient(effectiveUrl, effectiveKey);
 
 export interface SupabaseProfile {
   id: string; // matches auth.users.id
-  email: string;
+  email?: string;
   username: string;
   created_at: string;
   streak?: number;
@@ -44,70 +44,98 @@ export interface SupabaseProfile {
 
 /**
  * Ensures user profile exists in 'profiles' table after successful auth.
- * Prevents duplicate profile creation.
+ * Schema: profiles(id, username, created_at) — progress lives in user_data.
  */
 export async function ensureUserProfile(
   userId: string,
   email: string,
   username: string
 ): Promise<{ success: boolean; profile?: SupabaseProfile; error?: string }> {
+  const fallbackProfile: SupabaseProfile = {
+    id: userId,
+    email,
+    username: username || email.split("@")[0] || "user",
+    created_at: new Date().toISOString()
+  };
+
   if (!isSupabaseConfigured()) {
-    return {
-      success: true,
-      profile: {
-        id: userId,
-        email,
-        username,
-        created_at: new Date().toISOString()
-      }
-    };
+    return { success: true, profile: fallbackProfile };
   }
 
   try {
-    // 1. Check if profile already exists
-    const { data: existingProfile, error: fetchErr } = await supabase
+    const { data: existingProfile } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id, username, created_at")
       .eq("id", userId)
       .maybeSingle();
 
     if (existingProfile) {
-      return { success: true, profile: existingProfile };
+      return {
+        success: true,
+        profile: { ...existingProfile, email }
+      };
     }
-
-    // 2. Insert new profile only if authentic and not duplicate
-    const newProfile: SupabaseProfile = {
-      id: userId,
-      email,
-      username: username || email.split("@")[0],
-      created_at: new Date().toISOString()
-    };
 
     const { data: inserted, error: insertErr } = await supabase
       .from("profiles")
-      .upsert(newProfile, { onConflict: "id" })
-      .select("*")
+      .upsert(
+        {
+          id: userId,
+          username: fallbackProfile.username
+        },
+        { onConflict: "id" }
+      )
+      .select("id, username, created_at")
       .single();
 
     if (insertErr) {
       console.error("Error creating Supabase profile:", insertErr.message);
-      // Return newly built profile in memory as fallback if table missing
-      return { success: true, profile: newProfile };
+      return { success: true, profile: fallbackProfile };
     }
 
-    return { success: true, profile: inserted || newProfile };
-  } catch (err: any) {
-    console.error("Exception in ensureUserProfile:", err);
+    // Ensure a user_data row exists for progress sync
+    await supabase.from("user_data").upsert(
+      {
+        user_id: userId,
+        logs: [],
+        journals: [],
+        seed_type: "tomato"
+      },
+      { onConflict: "user_id" }
+    );
+
     return {
       success: true,
-      profile: {
-        id: userId,
-        email,
-        username,
-        created_at: new Date().toISOString()
-      }
+      profile: inserted ? { ...inserted, email } : fallbackProfile
     };
+  } catch (err: any) {
+    console.error("Exception in ensureUserProfile:", err);
+    return { success: true, profile: fallbackProfile };
   }
+}
+
+function mapLogsFromDb(raw: unknown): LogEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((row: any) => ({
+    id: row.id,
+    date: row.date,
+    habit: row.habit,
+    consumed: Boolean(row.consumed),
+    quantity: row.quantity,
+    reason: row.reason,
+    solution: row.solution,
+    timestamp: row.timestamp
+  }));
+}
+
+function mapJournalsFromDb(raw: unknown): JournalEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((row: any) => ({
+    id: row.id,
+    date: row.date,
+    text: row.text,
+    timestamp: row.timestamp
+  }));
 }
 
 /**
@@ -250,45 +278,20 @@ export async function signInWithSupabase(
       data.user.user_metadata?.username || input
     );
 
-    // Step 3: Retrieve saved smoking records / logs
-    const { data: dbLogs } = await supabase
-      .from("smoking_records")
-      .select("*")
-      .eq("user_id", userId)
-      .order("timestamp", { ascending: true });
-
-    // Step 4: Retrieve saved diary / journal entries
-    const { data: dbJournals } = await supabase
-      .from("diary_entries")
-      .select("*")
-      .eq("user_id", userId)
-      .order("timestamp", { ascending: true });
-
-    const formattedLogs: LogEntry[] = (dbLogs || []).map((row: any) => ({
-      id: row.id,
-      date: row.date,
-      habit: row.habit,
-      consumed: Boolean(row.consumed),
-      quantity: row.quantity,
-      reason: row.reason,
-      solution: row.solution,
-      timestamp: row.timestamp
-    }));
-
-    const formattedJournals: JournalEntry[] = (dbJournals || []).map((row: any) => ({
-      id: row.id,
-      date: row.date,
-      text: row.text,
-      timestamp: row.timestamp
-    }));
+    // Step 3: Retrieve progress from user_data (logs / journals / smoking_profile)
+    const cloud = await fetchUserDataFromSupabase(userId);
 
     return {
       success: true,
       user: data.user,
-      profile: profileRes.profile,
-      logs: formattedLogs,
-      journals: formattedJournals,
-      smokingProfile: profileRes.profile?.smoking_profile || null
+      profile: {
+        ...(profileRes.profile || { id: userId, username: input, created_at: new Date().toISOString() }),
+        smoking_profile: cloud.smokingProfile,
+        seed_type: cloud.seedType
+      },
+      logs: cloud.logs,
+      journals: cloud.journals,
+      smokingProfile: cloud.smokingProfile
     };
   } catch (err: any) {
     return { success: false, error: err.message || "Failed to sign in." };
@@ -296,7 +299,7 @@ export async function signInWithSupabase(
 }
 
 /**
- * Saves/syncs logs, journals, and smoking profile to Supabase database linked to user_id.
+ * Saves/syncs logs, journals, and smoking profile to public.user_data (JSONB).
  */
 export async function syncUserProgressToSupabase(
   userId: string,
@@ -308,45 +311,25 @@ export async function syncUserProgressToSupabase(
   if (!isSupabaseConfigured() || !userId) return false;
 
   try {
-    // 1. Update Profile record with latest smokingProfile and progress
-    const profileUpdate: Partial<SupabaseProfile> = {};
-    if (smokingProfile !== undefined) profileUpdate.smoking_profile = smokingProfile;
-    if (extraSettings?.streak !== undefined) profileUpdate.streak = extraSettings.streak;
-    if (extraSettings?.plantStage !== undefined) profileUpdate.companion_plant_stage = extraSettings.plantStage;
-    if (extraSettings?.seedType !== undefined) profileUpdate.seed_type = extraSettings.seedType;
+    const payload: Record<string, unknown> = {
+      user_id: userId,
+      logs: logs || [],
+      journals: journals || [],
+      seed_type: extraSettings?.seedType || "tomato",
+      updated_at: new Date().toISOString()
+    };
 
-    if (Object.keys(profileUpdate).length > 0) {
-      await supabase.from("profiles").update(profileUpdate).eq("id", userId);
+    if (smokingProfile !== undefined) {
+      payload.smoking_profile = smokingProfile;
     }
 
-    // 2. Upsert smoking records
-    if (logs && logs.length > 0) {
-      const recordsToUpsert = logs.map((log) => ({
-        id: log.id,
-        user_id: userId,
-        date: log.date,
-        habit: log.habit,
-        consumed: log.consumed,
-        quantity: log.quantity || 0,
-        reason: log.reason || "",
-        solution: log.solution || "",
-        timestamp: log.timestamp || new Date().toISOString()
-      }));
+    const { error } = await supabase
+      .from("user_data")
+      .upsert(payload, { onConflict: "user_id" });
 
-      await supabase.from("smoking_records").upsert(recordsToUpsert, { onConflict: "id" });
-    }
-
-    // 3. Upsert diary entries
-    if (journals && journals.length > 0) {
-      const entriesToUpsert = journals.map((j) => ({
-        id: j.id,
-        user_id: userId,
-        date: j.date,
-        text: j.text,
-        timestamp: j.timestamp || new Date().toISOString()
-      }));
-
-      await supabase.from("diary_entries").upsert(entriesToUpsert, { onConflict: "id" });
+    if (error) {
+      console.error("Error syncing progress to Supabase user_data:", error.message);
+      return false;
     }
 
     return true;
@@ -363,56 +346,47 @@ export async function fetchUserDataFromSupabase(userId: string): Promise<{
   profile: SupabaseProfile | null;
   logs: LogEntry[];
   journals: JournalEntry[];
+  smokingProfile: SmokingProfile | null;
+  seedType: string;
 }> {
   if (!isSupabaseConfigured() || !userId) {
-    return { profile: null, logs: [], journals: [] };
+    return { profile: null, logs: [], journals: [], smokingProfile: null, seedType: "tomato" };
   }
 
   try {
     const { data: profile } = await supabase
       .from("profiles")
-      .select("*")
+      .select("id, username, created_at")
       .eq("id", userId)
       .maybeSingle();
 
-    const { data: dbLogs } = await supabase
-      .from("smoking_records")
-      .select("*")
+    const { data: userData, error } = await supabase
+      .from("user_data")
+      .select("logs, journals, seed_type, smoking_profile")
       .eq("user_id", userId)
-      .order("timestamp", { ascending: true });
+      .maybeSingle();
 
-    const { data: dbJournals } = await supabase
-      .from("diary_entries")
-      .select("*")
-      .eq("user_id", userId)
-      .order("timestamp", { ascending: true });
+    if (error) {
+      console.error("Error fetching user_data:", error.message);
+    }
 
-    const formattedLogs: LogEntry[] = (dbLogs || []).map((row: any) => ({
-      id: row.id,
-      date: row.date,
-      habit: row.habit,
-      consumed: Boolean(row.consumed),
-      quantity: row.quantity,
-      reason: row.reason,
-      solution: row.solution,
-      timestamp: row.timestamp
-    }));
-
-    const formattedJournals: JournalEntry[] = (dbJournals || []).map((row: any) => ({
-      id: row.id,
-      date: row.date,
-      text: row.text,
-      timestamp: row.timestamp
-    }));
+    const logs = mapLogsFromDb(userData?.logs);
+    const journals = mapJournalsFromDb(userData?.journals);
+    const smokingProfile = (userData?.smoking_profile as SmokingProfile | null) || null;
+    const seedType = userData?.seed_type || "tomato";
 
     return {
-      profile: profile || null,
-      logs: formattedLogs,
-      journals: formattedJournals
+      profile: profile
+        ? { ...profile, smoking_profile: smokingProfile, seed_type: seedType }
+        : null,
+      logs,
+      journals,
+      smokingProfile,
+      seedType
     };
   } catch (err) {
     console.error("Error fetching user data from Supabase:", err);
-    return { profile: null, logs: [], journals: [] };
+    return { profile: null, logs: [], journals: [], smokingProfile: null, seedType: "tomato" };
   }
 }
 
@@ -450,14 +424,11 @@ export async function updateUserCredentialsInSupabase(
       }
     }
 
-    const profileUpdates: any = {};
-    if (params.newUsername) profileUpdates.username = params.newUsername;
-    if (params.newEmail) profileUpdates.email = params.newEmail;
-
-    if (Object.keys(profileUpdates).length > 0 && userId) {
+    // profiles table only has username (email lives in auth.users)
+    if (params.newUsername && userId) {
       const { error: profErr } = await supabase
         .from("profiles")
-        .update(profileUpdates)
+        .update({ username: params.newUsername })
         .eq("id", userId);
 
       if (profErr) {
@@ -472,7 +443,7 @@ export async function updateUserCredentialsInSupabase(
 }
 
 /**
- * Permanently deletes user records (smoking_records, diary_entries, profiles) and logs out of Supabase.
+ * Permanently deletes user_data + profiles rows and signs out of Supabase.
  */
 export async function deleteUserAccountAndDataFromSupabase(
   userId: string
@@ -482,13 +453,8 @@ export async function deleteUserAccountAndDataFromSupabase(
   }
 
   try {
-    // 1. Delete smoking records
-    await supabase.from("smoking_records").delete().eq("user_id", userId);
-    // 2. Delete diary entries
-    await supabase.from("diary_entries").delete().eq("user_id", userId);
-    // 3. Delete profile row
+    await supabase.from("user_data").delete().eq("user_id", userId);
     await supabase.from("profiles").delete().eq("id", userId);
-    // 4. Sign out
     await supabase.auth.signOut();
 
     return { success: true };

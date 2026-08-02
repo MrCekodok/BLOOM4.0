@@ -21,7 +21,7 @@ import AccountSettingsModal from "./components/AccountSettingsModal";
 import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
-import { syncUserProgressToSupabase, fetchUserDataFromSupabase, isSupabaseConfigured } from "./lib/supabase";
+import { supabase, syncUserProgressToSupabase, fetchUserDataFromSupabase, isSupabaseConfigured } from "./lib/supabase";
 
 export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -233,11 +233,15 @@ export default function App() {
     localStorage.setItem("bloom_current_page", page);
   };
 
+  // Prevent empty local state from wiping Supabase before cloud hydrate finishes
+  const [cloudHydrated, setCloudHydrated] = useState(false);
+
   useEffect(() => {
     // Proactively delete older data versions to ensure a completely fresh start
     localStorage.removeItem("bloom_recovery_logs_raw");
     localStorage.removeItem("bloom_recovery_logs");
     localStorage.removeItem("bloom_recovery_logs_v2");
+    setCloudHydrated(false);
     
     if (activeUser) {
       const savedProf = localStorage.getItem(`bloom_smoking_profile_${activeUser}`);
@@ -304,7 +308,78 @@ export default function App() {
       setJournals([]);
       setSmokingProfile(null);
       setIsGuideOpen(false);
+      setCloudHydrated(true);
     }
+  }, [activeUser]);
+
+  // Hydrate Progress Tracker logs/journals from Supabase user_data
+  useEffect(() => {
+    if (!activeUser || !isSupabaseConfigured()) {
+      setCloudHydrated(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    const hydrateFromCloud = async () => {
+      try {
+        const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
+        let resolvedUserId = userId;
+
+        if (!resolvedUserId) {
+          const { data } = await supabase.auth.getSession();
+          resolvedUserId = data.session?.user?.id || "";
+          if (resolvedUserId) {
+            localStorage.setItem(`bloom_supabase_user_id_${activeUser}`, resolvedUserId);
+          }
+        }
+
+        if (!resolvedUserId) {
+          if (!cancelled) setCloudHydrated(true);
+          return;
+        }
+
+        const cloud = await fetchUserDataFromSupabase(resolvedUserId);
+        if (cancelled) return;
+
+        const mergeById = <T extends { id: string }>(local: T[], remote: T[]): T[] => {
+          const map = new Map<string, T>();
+          [...remote, ...local].forEach((item) => {
+            if (item?.id) map.set(item.id, item);
+          });
+          return Array.from(map.values());
+        };
+
+        if (cloud.logs.length > 0 || cloud.journals.length > 0 || cloud.smokingProfile) {
+          setLogs((prev) => {
+            const merged = mergeById(prev, cloud.logs);
+            localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, JSON.stringify(merged));
+            return merged;
+          });
+          setJournals((prev) => {
+            const merged = mergeById(prev, cloud.journals);
+            localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, JSON.stringify(merged));
+            return merged;
+          });
+          if (cloud.smokingProfile) {
+            setSmokingProfile(cloud.smokingProfile);
+            localStorage.setItem(
+              `bloom_smoking_profile_${activeUser}`,
+              JSON.stringify(cloud.smokingProfile)
+            );
+          }
+        }
+      } catch (err) {
+        console.warn("Could not hydrate progress from Supabase:", err);
+      } finally {
+        if (!cancelled) setCloudHydrated(true);
+      }
+    };
+
+    hydrateFromCloud();
+    return () => {
+      cancelled = true;
+    };
   }, [activeUser]);
 
   // Check if onboarding tour guide should pop up (first time user completes profile)
@@ -321,16 +396,26 @@ export default function App() {
 
   // Synchronize changes to cloud backend DB and Supabase for instant cross-device access!
   useEffect(() => {
-    if (!activeUser) return;
+    if (!activeUser || !cloudHydrated) return;
+
+    // Persist locally first so Progress Tracker survives refresh
+    localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, JSON.stringify(logs));
+    localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, JSON.stringify(journals));
+    if (smokingProfile) {
+      localStorage.setItem(`bloom_smoking_profile_${activeUser}`, JSON.stringify(smokingProfile));
+    }
 
     const syncToCloud = async () => {
       try {
         if (isSupabaseConfigured()) {
           const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
           if (userId) {
-            await syncUserProgressToSupabase(userId, logs, journals, smokingProfile, {
+            const ok = await syncUserProgressToSupabase(userId, logs, journals, smokingProfile, {
               seedType
             });
+            if (!ok) {
+              console.warn("Supabase user_data sync returned false");
+            }
           }
         }
 
@@ -354,7 +439,7 @@ export default function App() {
     }, 1200);
 
     return () => clearTimeout(timer);
-  }, [logs, journals, smokingProfile, activeUser, seedType]);
+  }, [logs, journals, smokingProfile, activeUser, seedType, cloudHydrated]);
 
   // Register Service Worker and proactively ask for notification permission on first load if logged in
   useEffect(() => {
