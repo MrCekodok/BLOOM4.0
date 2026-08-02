@@ -1,5 +1,5 @@
 -- Supabase Database Schema for Bloom
--- Copy and run these SQL statements in your Supabase SQL Editor (https://app.supabase.com)
+-- Safe to re-run: tables use IF NOT EXISTS; policies are dropped then recreated.
 
 -- 1. Create Profiles Table (Linked to Supabase Auth)
 CREATE TABLE IF NOT EXISTS public.profiles (
@@ -15,10 +15,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   last_simulated_date TEXT
 );
 
--- Enable Row Level Security (RLS) on Profiles
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for Profiles
+DROP POLICY IF EXISTS "Users can view their own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can insert their own profile" ON public.profiles;
+DROP POLICY IF EXISTS "Users can update their own profile" ON public.profiles;
+
 CREATE POLICY "Users can view their own profile"
   ON public.profiles FOR SELECT
   USING (auth.uid() = id);
@@ -45,10 +47,10 @@ CREATE TABLE IF NOT EXISTS public.smoking_records (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Enable RLS on Smoking Records
 ALTER TABLE public.smoking_records ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for Smoking Records
+DROP POLICY IF EXISTS "Users can manage their own smoking records" ON public.smoking_records;
+
 CREATE POLICY "Users can manage their own smoking records"
   ON public.smoking_records FOR ALL
   USING (auth.uid() = user_id);
@@ -63,10 +65,10 @@ CREATE TABLE IF NOT EXISTS public.diary_entries (
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Enable RLS on Diary Entries
 ALTER TABLE public.diary_entries ENABLE ROW LEVEL SECURITY;
 
--- RLS Policies for Diary Entries
+DROP POLICY IF EXISTS "Users can manage their own diary entries" ON public.diary_entries;
+
 CREATE POLICY "Users can manage their own diary entries"
   ON public.diary_entries FOR ALL
   USING (auth.uid() = user_id);
