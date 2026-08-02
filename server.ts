@@ -682,6 +682,84 @@ Keep the entire text around 50-70 words total, structured, readable, and highly 
     }
   });
 
+  // Explainable AI (XAI): narrate weekly/monthly stats before recommendations
+  app.post("/api/insight-explain", async (req, res) => {
+    try {
+      const { summary, lang, period } = req.body || {};
+      const selectedLang = lang || "en";
+      const langNameMap: Record<string, string> = {
+        en: "English",
+        ms: "Malay (Bahasa Melayu)",
+        zh: "Simplified Chinese",
+        ko: "Korean",
+      };
+      const languageName = langNameMap[selectedLang] || "English";
+      const scope = period === "month" ? "month" : "week";
+
+      if (!summary || typeof summary !== "object") {
+        return res.status(400).json({
+          error: "Missing summary payload",
+          isFallback: true
+        });
+      }
+
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey.trim() === "") {
+        return res.json({ isFallback: true, lines: null, source: "rules" });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: { "User-Agent": "aistudio-build" }
+        }
+      });
+
+      const prompt = `You are an explainable-AI coach for a quit-smoking/vaping app (Bloom).
+Your job is ONLY to explain the user's ${scope}ly tracking data in plain language.
+Do NOT give a numbered action plan or quest list — recommendations are handled separately.
+
+Data JSON:
+${JSON.stringify(summary)}
+
+Write EXACTLY 2 or 3 short sentences in ${languageName}.
+Rules:
+1. Cite concrete numbers from the JSON (clean days, slips, quantity change, top trigger %).
+2. Explain what the pattern means for craving risk in everyday words.
+3. End by saying the next recommendations are chosen because of these signals.
+4. No markdown headings. No bullet lists. Warm, non-judgmental tone.
+5. Total under 70 words.
+`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt,
+        config: { temperature: 0.4 }
+      });
+
+      const text = (response.text || "").trim();
+      const lines = text
+        .split(/(?<=[.!?])\s+/)
+        .map((s: string) => s.trim())
+        .filter(Boolean)
+        .slice(0, 3);
+
+      if (lines.length === 0) {
+        return res.json({ isFallback: true, lines: null, source: "rules" });
+      }
+
+      res.json({ isFallback: false, lines, source: "gemini" });
+    } catch (error: any) {
+      console.error("Error generating insight explanation:", error);
+      res.json({
+        isFallback: true,
+        lines: null,
+        source: "rules",
+        error: error.message
+      });
+    }
+  });
+
   // 6. URGE BUTTON COUNSELOR ENDPOINT
   app.post("/api/urge-quest", async (req, res) => {
     try {

@@ -4,6 +4,7 @@ build/
 public
 coverage/
 .vercel
+.tmp
 .env
 .env.*
 !.env.example

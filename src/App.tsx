@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { LogEntry, JournalEntry, SmokingProfile } from "./types";
 import Header from "./components/Header";
 import DailyCheckIn from "./components/DailyCheckIn";
@@ -6,7 +6,7 @@ import StreakCalendar from "./components/StreakCalendar";
 import Journal from "./components/Journal";
 import UserAccount from "./components/UserAccount";
 import FlowerPot from "./components/FlowerPot";
-import { Activity, Phone, ChevronRight, ArrowRight, ArrowLeft, Sparkles } from "lucide-react";
+import { Activity, Phone, ChevronRight, ArrowRight, ArrowLeft, Sparkles, Cloud, CloudOff, RefreshCw, Check } from "lucide-react";
 import { Language, translate } from "./translations";
 import LogoutScreen from "./components/LogoutScreen";
 import { motion } from "motion/react";
@@ -22,6 +22,9 @@ import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
 import { supabase, syncUserProgressToSupabase, fetchUserDataFromSupabase, isSupabaseConfigured } from "./lib/supabase";
+import { isBloomAnalyticsEnabled } from "./lib/features";
+import { buildWeeklyInsight, buildMonthlyInsight } from "./lib/weeklyInsights";
+import WeeklyInsightsCard from "./components/WeeklyInsightsCard";
 
 export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -235,6 +238,98 @@ export default function App() {
 
   // Prevent empty local state from wiping Supabase before cloud hydrate finishes
   const [cloudHydrated, setCloudHydrated] = useState(false);
+  type CloudSyncStatus = "synced" | "pending" | "syncing" | "offline";
+  const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>(() =>
+    typeof navigator !== "undefined" && navigator.onLine === false ? "offline" : "synced"
+  );
+  const syncPayloadRef = useRef({
+    logs,
+    journals,
+    smokingProfile,
+    activeUser,
+    seedType,
+    cloudHydrated: false as boolean
+  });
+  const runCloudSyncRef = useRef<(reason?: string) => Promise<void>>(async () => {});
+
+  useEffect(() => {
+    syncPayloadRef.current = {
+      logs,
+      journals,
+      smokingProfile,
+      activeUser,
+      seedType,
+      cloudHydrated
+    };
+  }, [logs, journals, smokingProfile, activeUser, seedType, cloudHydrated]);
+
+  runCloudSyncRef.current = async () => {
+    const payload = syncPayloadRef.current;
+    if (!payload.activeUser || !payload.cloudHydrated) return;
+
+    const pendingKey = `bloom_sync_pending_${payload.activeUser}`;
+
+    // Always persist locally first (offline-safe)
+    localStorage.setItem(`bloom_recovery_logs_v4_${payload.activeUser}`, JSON.stringify(payload.logs));
+    localStorage.setItem(`bloom_journal_entries_v4_${payload.activeUser}`, JSON.stringify(payload.journals));
+    if (payload.smokingProfile) {
+      localStorage.setItem(
+        `bloom_smoking_profile_${payload.activeUser}`,
+        JSON.stringify(payload.smokingProfile)
+      );
+    }
+
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      localStorage.setItem(pendingKey, "1");
+      setSyncStatus("offline");
+      return;
+    }
+
+    setSyncStatus("syncing");
+
+    try {
+      let supabaseOk = true;
+      if (isSupabaseConfigured()) {
+        const userId = localStorage.getItem(`bloom_supabase_user_id_${payload.activeUser}`) || "";
+        if (userId) {
+          supabaseOk = await syncUserProgressToSupabase(
+            userId,
+            payload.logs,
+            payload.journals,
+            payload.smokingProfile,
+            { seedType: payload.seedType }
+          );
+        }
+      }
+
+      try {
+        await fetch("/api/sync/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: payload.activeUser,
+            logs: payload.logs,
+            journals: payload.journals,
+            seedType: payload.seedType
+          })
+        });
+      } catch {
+        // Local Express sync is optional; Supabase is the cloud source of truth.
+      }
+
+      if (supabaseOk || !isSupabaseConfigured()) {
+        localStorage.removeItem(pendingKey);
+        setSyncStatus("synced");
+      } else {
+        localStorage.setItem(pendingKey, "1");
+        setSyncStatus("pending");
+      }
+    } catch (err) {
+      console.warn("Auto-sync could not reach server. Updates stored locally.", err);
+      localStorage.setItem(pendingKey, "1");
+      setSyncStatus(typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "pending");
+    }
+  };
 
   useEffect(() => {
     // Proactively delete older data versions to ensure a completely fresh start
@@ -394,52 +489,63 @@ export default function App() {
 
 
 
-  // Synchronize changes to cloud backend DB and Supabase for instant cross-device access!
+  // Local-first persist + cloud sync (with offline pending queue)
   useEffect(() => {
     if (!activeUser || !cloudHydrated) return;
 
-    // Persist locally first so Progress Tracker survives refresh
+    // Avoid wiping richer local cache with an empty in-memory state (load race)
+    if (logs.length === 0) {
+      try {
+        const existingRaw = localStorage.getItem(`bloom_recovery_logs_v4_${activeUser}`);
+        const existing = existingRaw ? JSON.parse(existingRaw) : [];
+        if (Array.isArray(existing) && existing.length > 0) {
+          setLogs(existing);
+          return;
+        }
+      } catch {
+        // continue with empty
+      }
+    }
+
     localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, JSON.stringify(logs));
     localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, JSON.stringify(journals));
     if (smokingProfile) {
       localStorage.setItem(`bloom_smoking_profile_${activeUser}`, JSON.stringify(smokingProfile));
     }
 
-    const syncToCloud = async () => {
-      try {
-        if (isSupabaseConfigured()) {
-          const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
-          if (userId) {
-            const ok = await syncUserProgressToSupabase(userId, logs, journals, smokingProfile, {
-              seedType
-            });
-            if (!ok) {
-              console.warn("Supabase user_data sync returned false");
-            }
-          }
-        }
-
-        await fetch("/api/sync/push", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            username: activeUser,
-            logs,
-            journals,
-            seedType
-          })
-        });
-      } catch (err) {
-        console.warn("Auto-sync could not reach server. Updates stored locally.", err);
-      }
-    };
+    const pendingKey = `bloom_sync_pending_${activeUser}`;
+    localStorage.setItem(pendingKey, "1");
+    setSyncStatus(typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "pending");
 
     const timer = setTimeout(() => {
-      syncToCloud();
+      void runCloudSyncRef.current();
     }, 1200);
 
     return () => clearTimeout(timer);
   }, [logs, journals, smokingProfile, activeUser, seedType, cloudHydrated]);
+
+  // Auto-retry sync when connection returns
+  useEffect(() => {
+    const handleOnline = () => {
+      const user = syncPayloadRef.current.activeUser;
+      const pending = user ? localStorage.getItem(`bloom_sync_pending_${user}`) === "1" : false;
+      if (pending || syncPayloadRef.current.cloudHydrated) {
+        void runCloudSyncRef.current();
+      }
+    };
+    const handleOffline = () => {
+      setSyncStatus("offline");
+      const user = syncPayloadRef.current.activeUser;
+      if (user) localStorage.setItem(`bloom_sync_pending_${user}`, "1");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // Register Service Worker and proactively ask for notification permission on first load if logged in
   useEffect(() => {
@@ -776,6 +882,43 @@ export default function App() {
         ? "bg-emerald-950/80" 
         : "bg-emerald-950/60"
     }`}>
+      {/* Offline / sync status — local-first redundancy */}
+      {activeUser && (
+        <button
+          type="button"
+          onClick={() => {
+            if (syncStatus === "pending" || syncStatus === "offline") {
+              void runCloudSyncRef.current();
+            }
+          }}
+          title={
+            syncStatus === "pending" || syncStatus === "offline"
+              ? translate(language, "syncRetry")
+              : undefined
+          }
+          className={`fixed top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-bold shadow-md border backdrop-blur-md transition-all cursor-pointer ${
+            syncStatus === "synced"
+              ? "bg-emerald-50/90 border-emerald-200 text-emerald-800 opacity-80 hover:opacity-100"
+              : syncStatus === "syncing"
+                ? "bg-sky-50/95 border-sky-200 text-sky-800"
+                : syncStatus === "offline"
+                  ? "bg-amber-50/95 border-amber-300 text-amber-900"
+                  : "bg-orange-50/95 border-orange-300 text-orange-900"
+          }`}
+        >
+          {syncStatus === "synced" && <Check className="w-3.5 h-3.5" />}
+          {syncStatus === "syncing" && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
+          {syncStatus === "offline" && <CloudOff className="w-3.5 h-3.5" />}
+          {syncStatus === "pending" && <Cloud className="w-3.5 h-3.5" />}
+          <span>
+            {syncStatus === "synced" && translate(language, "syncSynced")}
+            {syncStatus === "syncing" && translate(language, "syncSyncing")}
+            {syncStatus === "offline" && translate(language, "syncOffline")}
+            {syncStatus === "pending" && translate(language, "syncPending")}
+          </span>
+        </button>
+      )}
+
       {/* Greenhouse Atmosphere Backdrop */}
       {isAuthOrOnboardingPage ? (
         /* Greenhouse Garden Outdoor Atmosphere Backdrop for Auth, Profile Setup, and Seed Selection Pages */
@@ -1345,6 +1488,19 @@ export default function App() {
                   </div>
                 </div>
                 
+                {/* Weekly Insights + rule-based recommendations (feature-flagged) */}
+                {isBloomAnalyticsEnabled() && (
+                  <WeeklyInsightsCard
+                    language={language}
+                    weekly={buildWeeklyInsight(logs, currentDateStr)}
+                    monthly={buildMonthlyInsight(logs, currentDateStr)}
+                    onStartQuest={(quest) => {
+                      setActiveHealthQuestTab(quest);
+                      setIsHealthQuestsOpen(true);
+                    }}
+                  />
+                )}
+
                 {/* Progress Tracker (Streak Calendar) */}
                 <div className="grid grid-cols-1 gap-6 relative z-10">
                   <StreakCalendar logs={logs} onToggleDay={handleToggleDay} language={language} activeUser={activeUser} currentDateStr={currentDateStr} onDateChange={handleCurrentDateChange} />
