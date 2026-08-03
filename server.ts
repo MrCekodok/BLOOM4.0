@@ -722,13 +722,13 @@ Do NOT give a numbered action plan or quest list — recommendations are handled
 Data JSON:
 ${JSON.stringify(summary)}
 
-Write EXACTLY 2 or 3 short sentences in ${languageName}.
+Write EXACTLY 2 or 3 short bullet points in ${languageName}.
 Rules:
-1. Cite concrete numbers from the JSON (clean days, slips, quantity change, top trigger %).
-2. Explain what the pattern means for craving risk in everyday words.
-3. End by saying the next recommendations are chosen because of these signals.
-4. No markdown headings. No bullet lists. Warm, non-judgmental tone.
-5. Total under 70 words.
+1. One idea per bullet. Keep each bullet under 12 words.
+2. Use simple everyday words a teen can understand.
+3. Cite concrete numbers (clean days, slips, % change, top trigger).
+4. Format as a plain bullet list using "- " at the start of each line.
+5. No markdown headings. No long sentences. Warm, non-judgmental tone.
 `;
 
       const response = await ai.models.generateContent({
@@ -738,11 +738,17 @@ Rules:
       });
 
       const text = (response.text || "").trim();
-      const lines = text
-        .split(/(?<=[.!?])\s+/)
-        .map((s: string) => s.trim())
-        .filter(Boolean)
-        .slice(0, 3);
+      const bulletLines = text
+        .split(/\n+/)
+        .map((s: string) => s.replace(/^[-•*\d.)\s]+/, "").trim())
+        .filter(Boolean);
+      const lines = (bulletLines.length >= 2
+        ? bulletLines
+        : text
+            .split(/(?<=[.!?])\s+/)
+            .map((s: string) => s.trim())
+            .filter(Boolean)
+      ).slice(0, 3);
 
       if (lines.length === 0) {
         return res.json({ isFallback: true, lines: null, source: "rules" });

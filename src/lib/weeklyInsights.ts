@@ -478,88 +478,88 @@ export function buildLocalInsightExplanation(
   if (insight.loggedDays === 0) {
     lines.push(
       lang === "ms"
-        ? `Tiada log ${period === "week" ? "mingguan" : "bulanan"} lagi — corak belum dapat diterangkan.`
-        : `No ${period === "week" ? "weekly" : "monthly"} logs yet — there isn’t enough pattern data to explain.`
+        ? `Belum ada log ${period === "week" ? "minggu" : "bulan"} ini.`
+        : `No logs yet this ${period}.`
     );
     lines.push(
       lang === "ms"
-        ? "Satu daftar masuk jujur akan membuka penjelasan dan cadangan seterusnya."
-        : "One honest check-in will unlock a clearer explanation and the next recommendations."
+        ? "Buat 1 daftar masuk untuk buka penjelasan."
+        : "Log 1 check-in to unlock this."
     );
     return { signals, lines, source: "rules" };
   }
 
-  // Line 1: overall pattern
+  // Point 1: overall pattern
   if (insight.slipDays === 0) {
     lines.push(
       lang === "ms"
-        ? `Anda mencatat ${insight.cleanDays} hari bersih tanpa terlanjur dalam tempoh ini — isyarat kawalan yang kuat.`
-        : `You logged ${insight.cleanDays} clean day(s) with no slips in this period — a strong control signal.`
+        ? `${insight.cleanDays} hari bersih, tiada terlanjur — anda dalam kawalan.`
+        : `${insight.cleanDays} clean day(s), no slips — you're in control.`
     );
   } else if (insight.cleanDays >= insight.slipDays) {
     lines.push(
       lang === "ms"
-        ? `Hari bersih (${insight.cleanDays}) masih melebihi hari terlanjur (${insight.slipDays}), jadi momentum positif masih ada walaupun ada kesilapan.`
-        : `Clean days (${insight.cleanDays}) still outnumber slip days (${insight.slipDays}), so momentum remains positive despite setbacks.`
+        ? `Lebih banyak hari bersih (${insight.cleanDays}) daripada terlanjur (${insight.slipDays}).`
+        : `More clean days (${insight.cleanDays}) than slips (${insight.slipDays}).`
     );
   } else {
     lines.push(
       lang === "ms"
-        ? `Hari terlanjur (${insight.slipDays}) lebih tinggi daripada hari bersih (${insight.cleanDays}) — tempoh ini memerlukan intervensi lebih kerap.`
-        : `Slip days (${insight.slipDays}) outweigh clean days (${insight.cleanDays}) — this period needs more frequent coping interventions.`
+        ? `Lebih banyak terlanjur (${insight.slipDays}) daripada hari bersih (${insight.cleanDays}).`
+        : `More slips (${insight.slipDays}) than clean days (${insight.cleanDays}).`
     );
   }
 
-  // Line 2: trigger / quantity drivers
+  // Point 2: trigger / quantity drivers
   if (insight.topTrigger && insight.quantityDeltaPct !== null && insight.quantityDeltaPct > 10) {
     lines.push(
       lang === "ms"
-        ? `Pencetus utama ialah ${insight.topTrigger.category} (${insight.topTrigger.percentage}%), dan kuantiti naik ${insight.quantityDeltaPct}% berbanding tempoh sebelumnya — kedua-dua isyarat ini memacu cadangan di bawah.`
-        : `Your dominant trigger is ${insight.topTrigger.category} (${insight.topTrigger.percentage}%), and quantity rose ${insight.quantityDeltaPct}% vs the prior period — both signals drive the recommendations below.`
+        ? `Pencetus utama: ${insight.topTrigger.category} (${insight.topTrigger.percentage}%). Penggunaan naik ${insight.quantityDeltaPct}%.`
+        : `Top trigger: ${insight.topTrigger.category} (${insight.topTrigger.percentage}%). Usage up ${insight.quantityDeltaPct}%.`
     );
   } else if (insight.topTrigger) {
     lines.push(
       lang === "ms"
-        ? `Corak terlanjur paling kerap dikaitkan dengan ${insight.topTrigger.category} (${insight.topTrigger.percentage}% kes) — cadangan akan menyasarkan pencetus ini dahulu.`
-        : `Most slips cluster around ${insight.topTrigger.category} (${insight.topTrigger.percentage}% of cases) — recommendations will target this trigger first.`
+        ? `Kebanyakan terlanjur dari ${insight.topTrigger.category} (${insight.topTrigger.percentage}%).`
+        : `Most slips from ${insight.topTrigger.category} (${insight.topTrigger.percentage}%).`
     );
   } else if (insight.quantityDeltaPct !== null && insight.quantityDeltaPct > 10) {
     lines.push(
       lang === "ms"
-        ? `Kuantiti penggunaan naik ${insight.quantityDeltaPct}% berbanding tempoh sebelumnya, jadi fokus utama ialah menurunkan intensiti keinginan harian.`
-        : `Usage quantity rose ${insight.quantityDeltaPct}% versus the prior period, so the priority is reducing daily urge intensity.`
+        ? `Penggunaan naik ${insight.quantityDeltaPct}% berbanding tempoh lepas.`
+        : `Usage up ${insight.quantityDeltaPct}% vs last period.`
     );
   } else if (insight.quantityDeltaPct !== null && insight.quantityDeltaPct < 0) {
     lines.push(
       lang === "ms"
-        ? `Kuantiti turun ${Math.abs(insight.quantityDeltaPct)}% berbanding tempoh sebelumnya — kemajuan nyata yang perlu dikekalkan dengan rutin penanganan.`
-        : `Quantity fell ${Math.abs(insight.quantityDeltaPct)}% versus the prior period — real progress to lock in with a coping routine.`
+        ? `Penggunaan turun ${Math.abs(insight.quantityDeltaPct)}% — kemajuan baik.`
+        : `Usage down ${Math.abs(insight.quantityDeltaPct)}% — nice progress.`
     );
   }
 
-  // Line 3: timing / monthly specifics
+  // Point 3: timing / monthly specifics
   if (!isMonthly(insight) && insight.worstWeekday !== null && insight.slipDays > 0) {
     const daysEn = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
     const daysMs = ["Ahad", "Isnin", "Selasa", "Rabu", "Khamis", "Jumaat", "Sabtu"];
     const dayName = (lang === "ms" ? daysMs : daysEn)[insight.worstWeekday];
     lines.push(
       lang === "ms"
-        ? `Hari paling berisiko ialah ${dayName}. Sediakan misi kesihatan lebih awal pada hari itu sebelum keinginan memuncak.`
-        : `Your highest-risk day is ${dayName}. Pre-load a health quest earlier that day before the urge peaks.`
+        ? `Hari paling berisiko: ${dayName}. Rancang misi lebih awal.`
+        : `Highest-risk day: ${dayName}. Plan a quest early.`
     );
   } else if (isMonthly(insight) && insight.bestStreak > 0) {
     lines.push(
       lang === "ms"
-        ? `Rekod bersih terpanjang bulan ini ialah ${insight.bestStreak} hari — gunakan itu sebagai bukti anda mampu mengekalkan rentak.`
-        : `Your longest clean streak this month is ${insight.bestStreak} day(s) — use that as proof you can sustain the rhythm.`
+        ? `Rekod bersih terpanjang: ${insight.bestStreak} hari.`
+        : `Longest clean streak: ${insight.bestStreak} day(s).`
     );
   }
 
   if (lines.length === 1) {
     lines.push(
       lang === "ms"
-        ? "Cadangan di bawah dipilih kerana ia paling sepadan dengan isyarat data di atas."
-        : "The recommendations below were selected because they best match the signals above."
+        ? "Cadangan di bawah ikut data di atas."
+        : "Tips below match this data."
     );
   }
 

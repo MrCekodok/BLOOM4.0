@@ -333,13 +333,19 @@ export default function WeeklyInsightsCard({
             </div>
           )}
 
-          <div className="space-y-1.5">
+          <ul className="space-y-1.5 m-0 pl-0 list-none">
             {explanation.lines.map((line, idx) => (
-              <p key={idx} className="text-xs text-sky-950/90 leading-relaxed">
-                {line}
-              </p>
+              <li
+                key={idx}
+                className="flex gap-2 text-xs text-sky-950/90 leading-snug"
+              >
+                <span className="shrink-0 text-sky-600 font-bold" aria-hidden>
+                  •
+                </span>
+                <span>{line.replace(/^[-•*]\s+/, "")}</span>
+              </li>
             ))}
-          </div>
+          </ul>
         </div>
       )}
 
