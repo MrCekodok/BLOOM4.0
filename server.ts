@@ -2,12 +2,66 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
+import OpenAI from "openai";
 import dotenv from "dotenv";
 import fs from "fs";
 import webPush from "web-push";
 
 dotenv.config({ path: ".env" });
 dotenv.config({ path: ".env.local", override: true });
+
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
+
+const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5";
+
+/** Simple per-IP rate limit for AI routes (in-memory). */
+const aiRateBuckets = new Map<string, { count: number; resetAt: number }>();
+const AI_RATE_WINDOW_MS = 60_000;
+const AI_RATE_MAX = 20;
+
+function getClientIp(req: express.Request): string {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.length > 0) {
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function checkAiRateLimit(req: express.Request): boolean {
+  const ip = getClientIp(req);
+  const now = Date.now();
+  const bucket = aiRateBuckets.get(ip);
+  if (!bucket || now >= bucket.resetAt) {
+    aiRateBuckets.set(ip, { count: 1, resetAt: now + AI_RATE_WINDOW_MS });
+    return true;
+  }
+  if (bucket.count >= AI_RATE_MAX) return false;
+  bucket.count += 1;
+  return true;
+}
+
+const BLOOM_INSTRUCTIONS = `
+You are BLOOM, a warm and non-judgmental support guide for teenagers who want to reduce or quit smoking or vaping.
+
+You are not a doctor, therapist, emergency service, or replacement for a trusted adult or healthcare professional.
+Never shame, threaten, diagnose, or promise a guaranteed health outcome.
+Do not give instructions for obtaining, hiding, or using nicotine products.
+Do not claim that a specific breathing exercise, dopamine change, vagus-nerve effect, or chemical amount is guaranteed.
+
+Respond in the user's selected language. Understand the meaning of the whole message, not just keywords.
+Use previous messages to maintain context and avoid repeating the same response.
+Start with a short empathetic acknowledgment, then give one practical next step that can be done now.
+Ask at most one gentle follow-up question when it would help personalize the next step.
+When appropriate, connect the next step to the 4D strategies: Delay, Deep Breathing, Drink Water, or Do Something Else.
+Briefly explain why the suggested action fits the user's trigger, without overstating medical science.
+
+If the user reports chest pain, severe breathing difficulty, fainting, poisoning, immediate danger, or self-harm thoughts,
+prioritize contacting a trusted adult and local emergency or crisis services immediately.
+
+Keep the tone hopeful, age-appropriate, and concise.
+`;
 
 const DB_FILE = path.join(process.cwd(), "bloom-db.json");
 
@@ -766,72 +820,208 @@ Rules:
     }
   });
 
-  // 6. URGE BUTTON COUNSELOR ENDPOINT
-  app.post("/api/urge-quest", async (req, res) => {
+  // 6. BLOOM OpenAI conversational support (server-side key only)
+  app.post("/api/ai/chat", async (req, res) => {
     try {
-      const { habit, reason, lang } = req.body;
-      const selectedLang = lang || "en";
-      const habitName = habit === "cigarettes" ? "cigarettes" : "vaping";
-      const userReason = (reason || "").trim();
-      const apiKey = process.env.GEMINI_API_KEY;
-
-      if (!apiKey || apiKey === "MY_GEMINI_API_KEY" || apiKey.trim() === "") {
-        return res.json({ 
-          solution: getFallbackSolution(habitName, userReason, selectedLang), 
-          isFallback: true 
+      if (!checkAiRateLimit(req)) {
+        return res.status(429).json({
+          code: "RATE_LIMITED",
+          error: "Too many AI requests. Please wait a moment and try again."
         });
       }
 
-      const ai = new GoogleGenAI({
-        apiKey: apiKey,
-        httpOptions: {
-          headers: {
-            'User-Agent': 'aistudio-build',
-          }
-        }
+      const { messages, language = "en", context = {} } = req.body ?? {};
+
+      if (!Array.isArray(messages) || messages.length === 0) {
+        return res.status(400).json({
+          code: "INVALID_MESSAGES",
+          error: "A message is required."
+        });
+      }
+
+      const safeMessages = messages
+        .filter(
+          (message: any) =>
+            message &&
+            (message.role === "user" || message.role === "assistant") &&
+            typeof message.content === "string"
+        )
+        .slice(-12)
+        .map((message: any) => ({
+          role: message.role as "user" | "assistant",
+          content: message.content.trim().slice(0, 2000)
+        }));
+
+      const lastMessage = safeMessages[safeMessages.length - 1];
+      if (!lastMessage || lastMessage.role !== "user" || !lastMessage.content) {
+        return res.status(400).json({
+          code: "INVALID_LAST_MESSAGE",
+          error: "The last message must be from the user."
+        });
+      }
+
+      if (!openai) {
+        return res.status(503).json({
+          code: "AI_NOT_CONFIGURED",
+          error: "AI support is temporarily unavailable."
+        });
+      }
+
+      const safeContext = JSON.stringify({
+        language,
+        habit: context?.habit === "cigarettes" ? "cigarettes" : context?.habit === "vape" ? "vape" : undefined,
+        urgeLevel:
+          typeof context?.urgeLevel === "number" && context.urgeLevel >= 1 && context.urgeLevel <= 10
+            ? Math.round(context.urgeLevel)
+            : undefined,
+        trigger:
+          typeof context?.trigger === "string" ? context.trigger.slice(0, 300) : undefined
       });
+
+      const response = await openai.responses.create({
+        model: OPENAI_MODEL,
+        instructions: `${BLOOM_INSTRUCTIONS}\nSession context: ${safeContext}`,
+        input: safeMessages as OpenAI.Responses.ResponseInput,
+        store: false,
+        max_output_tokens: 350
+      });
+
+      const reply = (response as { output_text?: string }).output_text?.trim();
+      if (!reply) {
+        return res.status(502).json({
+          code: "EMPTY_AI_RESPONSE",
+          error: "The AI returned no text."
+        });
+      }
+
+      return res.json({ reply, responseId: response.id });
+    } catch (error: any) {
+      const status = error?.status || error?.statusCode;
+      console.error("BLOOM AI chat error:", error?.message || "unknown");
+      if (status === 429) {
+        return res.status(429).json({
+          code: "QUOTA_EXCEEDED",
+          error: "AI quota is temporarily exhausted. Try a 4D activity and try again later."
+        });
+      }
+      return res.status(502).json({
+        code: "AI_REQUEST_FAILED",
+        error: "AI support is temporarily unavailable."
+      });
+    }
+  });
+
+  // Personalized 4D quest suggestion (OpenAI) — not canned counselor prose
+  app.post("/api/ai/quest", async (req, res) => {
+    try {
+      if (!checkAiRateLimit(req)) {
+        return res.status(429).json({
+          code: "RATE_LIMITED",
+          error: "Too many AI requests. Please wait a moment and try again."
+        });
+      }
+
+      const { language = "en", context = {} } = req.body ?? {};
+      if (!openai) {
+        return res.status(503).json({
+          code: "AI_NOT_CONFIGURED",
+          error: "AI support is temporarily unavailable."
+        });
+      }
 
       const langNameMap: Record<string, string> = {
         en: "English",
         ms: "Malay (Bahasa Melayu)",
         zh: "Simplified Chinese",
-        ko: "Korean",
+        ko: "Korean"
       };
-      const languageName = langNameMap[selectedLang] || "English";
+      const languageName = langNameMap[language] || "English";
+      const habit = context?.habit === "cigarettes" ? "cigarettes" : "vaping";
+      const trigger =
+        typeof context?.trigger === "string" ? context.trigger.slice(0, 300) : "";
+      const urgeLevel =
+        typeof context?.urgeLevel === "number" ? Math.min(10, Math.max(1, context.urgeLevel)) : null;
 
-      const prompt = `You are a warm, empathetic quit-smoking and quit-vaping counselor and support group leader for teenagers and young adults.
+      const questPrompt = `Create one short coping quest for a teen who wants to reduce ${habit}.
+Language: ${languageName} only for all user-facing strings.
+Trigger (may be empty): ${trigger || "not specified"}
+Urge level 1-10 (may be null): ${urgeLevel ?? "not specified"}
 
-The user shared why they feel an urge to ${habitName} right now:
-"${userReason || "I feel a strong craving and urge to vape or smoke right now."}"
+Return ONLY valid JSON with this shape:
+{
+  "questTitle": string,
+  "steps": string[2-4],
+  "reason": string,
+  "fourDType": "delay" | "deep_breathing" | "drink_water" | "do_something_else",
+  "estimatedMinutes": number
+}
 
-Please write a supportive, non-judgmental, and comforting counselor response in Markdown, strictly in "${languageName}".
+The "reason" field must be a natural sentence like:
+"Why this mission: You selected [trigger], so this activity is designed to [specific purpose]."
+If no trigger was given, write a natural variant without inventing personal details.
+Do not claim medical guarantees. Keep it supportive and brief.`;
 
-CRITICAL BREVITY REQUIREMENT: Keep the entire response EXTREMELY SHORT so the user can read and understand it in under 10 seconds (UNDER 40 WORDS TOTAL).
-
-Requirements:
-1. 1 short comforting sentence validating their feeling (under 10 words).
-2. "3 Quick Actions & Evidence:" followed by EXACTLY 3 bullet points with brief evidence of why it works (e.g. "* 🫁 **Deep Breath**: Calms vagus nerve & heart rate").
-3. Conclude with 1 short encouraging scientific fact line (under 10 words).
-`;
-
-      const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
-        contents: prompt,
-        config: {
-          temperature: 0.7,
-        }
+      const response = await openai.responses.create({
+        model: OPENAI_MODEL,
+        instructions: BLOOM_INSTRUCTIONS,
+        input: questPrompt,
+        store: false,
+        max_output_tokens: 400
       });
 
-      const text = response.text || getFallbackSolution(habitName, userReason, selectedLang);
-      res.json({ solution: text, isFallback: false });
+      const raw = (response as { output_text?: string }).output_text?.trim() || "";
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) {
+        return res.status(502).json({
+          code: "EMPTY_AI_RESPONSE",
+          error: "The AI returned no quest."
+        });
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      const allowed = new Set(["delay", "deep_breathing", "drink_water", "do_something_else"]);
+      if (
+        !parsed?.questTitle ||
+        !Array.isArray(parsed.steps) ||
+        !parsed.reason ||
+        !allowed.has(parsed.fourDType)
+      ) {
+        return res.status(502).json({
+          code: "EMPTY_AI_RESPONSE",
+          error: "The AI returned an invalid quest."
+        });
+      }
+
+      return res.json({
+        questTitle: String(parsed.questTitle).slice(0, 120),
+        steps: parsed.steps.map((s: unknown) => String(s).slice(0, 200)).slice(0, 4),
+        reason: String(parsed.reason).slice(0, 400),
+        fourDType: parsed.fourDType,
+        estimatedMinutes: Math.min(30, Math.max(1, Number(parsed.estimatedMinutes) || 3))
+      });
     } catch (error: any) {
-      console.error("Error generating counselor advice:", error);
-      res.json({ 
-        solution: getFallbackSolution(req.body.habit || "vape", req.body.reason || "", req.body.lang || "en"), 
-        isFallback: true, 
-        error: error.message 
+      const status = error?.status || error?.statusCode;
+      console.error("BLOOM AI quest error:", error?.message || "unknown");
+      if (status === 429) {
+        return res.status(429).json({
+          code: "QUOTA_EXCEEDED",
+          error: "AI quota is temporarily exhausted."
+        });
+      }
+      return res.status(502).json({
+        code: "AI_REQUEST_FAILED",
+        error: "AI support is temporarily unavailable."
       });
     }
+  });
+
+  // Legacy urge-quest path: no longer returns canned text as if it were AI
+  app.post("/api/urge-quest", async (_req, res) => {
+    return res.status(410).json({
+      code: "ENDPOINT_RETIRED",
+      error: "Use POST /api/ai/chat for conversational support.",
+      replacement: "/api/ai/chat"
+    });
   });
 
   // Serve the Service Worker dynamically with push capability

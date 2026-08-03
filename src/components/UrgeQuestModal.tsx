@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from "react";
-import { HeartHandshake, X, Minimize2, Maximize2, Send, MessageSquare, RefreshCw, Trophy, Phone, Copy, Check, Sparkles, Volume2 } from "lucide-react";
-import Markdown from "react-markdown";
+import { HeartHandshake, X, Minimize2, Maximize2, RefreshCw, Trophy, Phone, Copy, Check, Volume2 } from "lucide-react";
 import { Language } from "../translations";
+import BloomChatPanel from "./BloomChatPanel";
 
 interface UrgeQuestModalProps {
   language: Language;
   activeHabit?: string;
 }
 
-type ViewStep = "input" | "response" | "better" | "memory_game" | "game_won";
+type ViewStep = "chat" | "better" | "memory_game" | "game_won";
 
 // Audio sound tones for the 6 memory buttons (Frequencies in Hz)
 const BUTTON_FREQS = [261.63, 329.63, 392.00, 440.00, 523.25, 587.33];
@@ -25,11 +25,9 @@ const BUTTON_STYLES = [
 export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQuestModalProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [userReason, setUserReason] = useState("");
-  const [responseMarkdown, setResponseMarkdown] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [viewStep, setViewStep] = useState<ViewStep>("input");
+  const [viewStep, setViewStep] = useState<ViewStep>("chat");
   const [copiedNumber, setCopiedNumber] = useState<string | null>(null);
+  const [chatKey, setChatKey] = useState(0);
 
   // Memory Game States
   const [gameStage, setGameStage] = useState(1); // 1 to 5
@@ -221,41 +219,6 @@ export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQ
     ko: "금연 상담사 & 지원 그룹",
   };
 
-  const promptText: Record<Language, string> = {
-    en: "Why do you feel like vaping or smoking right now?",
-    ms: "Mengapa anda berasa mahu hisap vape atau rokok sekarang?",
-    zh: "请告诉我们您现在为什么想吸电子烟或香烟：",
-    ko: "지금 베이프나 담배가 생각나는 이유를 말씀해 주세요:",
-  };
-
-  const placeholderText: Record<Language, string> = {
-    en: "Type your reason here...",
-    ms: "Tulis sebab anda di sini...",
-    zh: "在此输入您的原因...",
-    ko: "이곳에 이유를 입력하세요...",
-  };
-
-  const submitText: Record<Language, string> = {
-    en: "Get Counselor Support & 3 Quick Actions 🌸",
-    ms: "Dapatkan Bimbingan & 3 Tindakan Pantas 🌸",
-    zh: "获取咨询建议与 3 个快捷方法 🌸",
-    ko: "상담 지원 및 3가지 즉시 행동 받기 🌸",
-  };
-
-  const resetText: Record<Language, string> = {
-    en: "Share Another Reason ✍️",
-    ms: "Kongsi Sebab Lain ✍️",
-    zh: "输入其他原因 ✍️",
-    ko: "다른 이유 작성하기 ✍️",
-  };
-
-  const feelingQuestion: Record<Language, string> = {
-    en: "How are you feeling right now?",
-    ms: "Bagaimana perasaan anda sekarang?",
-    zh: "您现在感觉如何？",
-    ko: "지금 기분이 어떠신가요?",
-  };
-
   const feelingBetterTitle: Record<Language, string> = {
     en: "🎉 Outstanding Progress!",
     ms: "🎉 Kemajuan Yang Cemerlang!",
@@ -305,66 +268,20 @@ export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQ
     ko: "📞 공식 금연 상담 전화 지원",
   };
 
-  const handleSubmitReason = async () => {
-    if (!userReason.trim()) return;
-
-    setIsLoading(true);
-    setResponseMarkdown(null);
-
-    try {
-      const res = await fetch("/api/urge-quest", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          habit: activeHabit,
-          reason: userReason,
-          lang: language,
-        }),
-      });
-      const data = await res.json();
-      const getLocalizedFallback = (lang: Language) => {
-        if (lang === "ms") {
-          return "Kami mendengar anda. Keinginan akan berlalu dalam 3 minit!\n\n**3 Tindakan Pantas & Bukti:**\n* 🫁 **Nafas Dalam**: Menenangkan saraf vagus & degupan jantung\n* 🥤 **Air Sejuk**: Mencetuskan refleks untuk menetapkan semula ketagihan\n* 🚶 **Tukar Bilik**: Memutuskan gelung pemutus tabiat persekitaran\n\n*Sains:* Gangguan positif membebaskan dopamin semula jadi! 🌸";
-        }
-        if (lang === "zh") {
-          return "我们听到了。吸食欲望通常在 3 分钟内消退！\n\n**3 项快速应对指南：**\n* 🫁 **深呼吸**：平复迷走神经，放缓心率\n* 🥤 **喝冷水**：通过冷刺激打断口唇期的渴望\n* 🚶 **换个房间**：打断原有环境对大脑的习惯刺激\n\n*科学事实：* 转移注意力能促进大脑释放天然多巴胺！🌸";
-        }
-        if (lang === "ko") {
-          return "당신의 마음을 이해합니다. 강한 욕구는 3분 이내에 지나갑니다!\n\n**3가지 빠른 행동 및 과학적 근거:**\n* 🫁 **깊은 호흡**: 미경신경을 안정시키고 심박수를 낮춥니다\n* 🥤 **차가운 물**: 자극 반사로 구강 욕구를 리셋합니다\n* 🚶 **장소 이동**: 위치 기반 습관 자극 고리를 차단합니다\n\n*과학적 사실:* 주의 전환은 자발적 도파민 생성을 유도합니다! 🌸";
-        }
-        return "We hear you. Cravings pass in 3 minutes!\n\n**3 Quick Actions & Evidence:**\n* 🫁 **Deep Breath**: Calms vagus nerve & heart rate\n* 🥤 **Cold Water**: Triggers shock reflex to reset oral craving\n* 🚶 **Change Room**: Interrupts location habit trigger loops\n\n*Science:* Distraction releases natural dopamine! 🌸";
-      };
-
-      if (data && data.solution) {
-        setResponseMarkdown(data.solution);
-      } else {
-        setResponseMarkdown(getLocalizedFallback(language));
-      }
-      setViewStep("response");
-    } catch (err) {
-      const getLocalizedFallback = (lang: Language) => {
-        if (lang === "ms") return "Kami mendengar anda. Keinginan akan berlalu dalam 3 minit!\n\n**3 Tindakan Pantas & Bukti:**\n* 🫁 **Nafas Dalam**: Menenangkan saraf vagus & degupan jantung\n* 🥤 **Air Sejuk**: Mencetuskan refleks untuk menetapkan semula ketagihan\n* 🚶 **Tukar Bilik**: Memutuskan gelung pemutus tabiat persekitaran\n\n*Sains:* Gangguan positif membebaskan dopamin semula jadi! 🌸";
-        if (lang === "zh") return "我们听到了。吸食欲望通常在 3 分钟内消退！\n\n**3 项快速应对指南：**\n* 🫁 **深呼吸**：平复迷走神经，放缓心率\n* 🥤 **喝冷水**：通过冷刺激打断口唇期的渴望\n* 🚶 **换个房间**：打断原有环境对大脑的习惯刺激\n\n*科学事实：* 转移注意力能促进大脑释放天然多巴胺！🌸";
-        if (lang === "ko") return "당신의 마음을 이해합니다. 강한 욕구는 3분 이내에 지나갑니다!\n\n**3가지 빠른 행동 및 과학적 근거:**\n* 🫁 **깊은 호흡**: 미경신경을 안정시키고 심박수를 낮춥니다\n* 🥤 **차가운 물**: 자극 반사로 구강 욕구를 리셋합니다\n* 🚶 **장소 이동**: 위치 기반 습관 자극 고리를 차단합니다\n\n*과학적 사실:* 주의 전환은 자발적 도파민 생성을 유도합니다! 🌸";
-        return "We hear you. Cravings pass in 3 minutes!\n\n**3 Quick Actions & Evidence:**\n* 🫁 **Deep Breath**: Calms vagus nerve & heart rate\n* 🥤 **Cold Water**: Triggers shock reflex to reset oral craving\n* 🚶 **Change Room**: Interrupts location habit trigger loops\n\n*Science:* Distraction releases natural dopamine! 🌸";
-      };
-      setResponseMarkdown(getLocalizedFallback(language));
-      setViewStep("response");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   const handleCopyHotline = (num: string) => {
     navigator.clipboard.writeText(num);
     setCopiedNumber(num);
     setTimeout(() => setCopiedNumber(null), 2000);
   };
 
-  const handleReset = () => {
-    setUserReason("");
-    setResponseMarkdown(null);
-    setViewStep("input");
+  const handleResetToChat = () => {
+    setViewStep("chat");
+    setChatKey((k) => k + 1);
+  };
+
+  const openModal = () => {
+    setIsOpen(true);
+    setViewStep("chat");
   };
 
   return (
@@ -374,7 +291,7 @@ export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQ
         <div className="fixed bottom-5 left-4 sm:bottom-6 sm:left-6 z-45 select-none">
           <button
             id="urge-button-trigger"
-            onClick={() => setIsOpen(true)}
+            onClick={openModal}
             className="group w-14 h-14 sm:w-16 sm:h-16 rounded-full aspect-square flex flex-col items-center justify-center p-1.5 bg-gradient-to-br from-red-600 via-rose-600 to-red-700 text-white shadow-2xl shadow-red-600/40 hover:shadow-red-500/60 hover:scale-110 active:scale-95 transition-all duration-300 border-2 sm:border-3 border-red-200 cursor-pointer animate-soft-pulse text-center relative overflow-hidden"
             title={buttonText[language] || buttonText.en}
           >
@@ -446,140 +363,22 @@ export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQ
 
             {/* Modal Body */}
             <div className="flex-1 space-y-4">
-              {/* STEP 1: INPUT REASON */}
-              {viewStep === "input" && !isLoading && (
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-extrabold text-stone-900 mb-1.5">
-                      {promptText[language] || promptText.en}
-                    </label>
-                    <textarea
-                      rows={3}
-                      value={userReason}
-                      onChange={(e) => setUserReason(e.target.value)}
-                      placeholder={placeholderText[language] || placeholderText.en}
-                      className="w-full p-3.5 text-xs font-medium text-stone-900 bg-stone-50 rounded-2xl border border-stone-200 focus:outline-none focus:ring-2 focus:ring-rose-500/50 focus:border-rose-400 transition-all placeholder:text-stone-400 resize-none"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleSubmitReason}
-                    disabled={!userReason.trim()}
-                    className="w-full py-3 px-5 bg-gradient-to-r from-rose-600 to-red-600 hover:from-rose-700 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white font-black text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-rose-600/20 cursor-pointer hover:scale-[1.01] active:scale-[0.99] transition-all flex items-center justify-center gap-2"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>{submitText[language] || submitText.en}</span>
-                  </button>
-                </div>
-              )}
-
-              {/* Loading State */}
-              {isLoading && (
-                <div className="py-12 flex flex-col items-center justify-center space-y-3">
-                  <div className="w-10 h-10 border-4 border-rose-600 border-t-transparent rounded-full animate-spin"></div>
-                  <p className="text-xs font-bold text-rose-900 animate-pulse text-center">
-                    Connecting with Quit Counselor & Support Group... 🌸
-                  </p>
-                </div>
-              )}
-
-              {/* STEP 2: COUNSELOR RESPONSE + 3 FEELING OPTION BUTTONS */}
-              {viewStep === "response" && responseMarkdown && !isLoading && (
-                <div className="space-y-4 animate-fadeIn">
-                  <div className="bg-gradient-to-br from-rose-50/70 via-white to-amber-50/50 p-4 sm:p-5 rounded-3xl border border-rose-200/80 shadow-xs">
-                    <div className="flex items-center gap-2 text-rose-900 font-extrabold text-xs pb-3 mb-3 border-b border-rose-200/60">
-                      <MessageSquare className="w-4 h-4 text-rose-600" />
-                      <span>{subtitleText[language] || subtitleText.en}</span>
-                    </div>
-
-                    <div className="markdown-body text-xs text-stone-800 leading-relaxed space-y-2">
-                      <Markdown>{responseMarkdown}</Markdown>
-                    </div>
-                  </div>
-
-                  {/* FEELING SELECTION BUTTONS */}
-                  <div className="bg-stone-50 p-4 rounded-3xl border border-stone-200/80 space-y-3">
-                    <p className="text-xs font-black text-stone-900 text-center">
-                      {feelingQuestion[language] || feelingQuestion.en}
-                    </p>
-
-                    <div className="grid grid-cols-1 gap-2">
-                      {/* Option 1: Better */}
-                      <button
-                        onClick={() => setViewStep("better")}
-                        className="w-full py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100 text-emerald-950 font-extrabold text-xs rounded-2xl border border-emerald-200 transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] text-left flex items-center justify-between"
-                      >
-                        <span>
-                          {language === "ms"
-                            ? "😊 Rasa Lebih Baik"
-                            : language === "zh"
-                            ? "😊 感觉好多了"
-                            : language === "ko"
-                            ? "😊 나아짐"
-                            : "😊 Better"}
-                        </span>
-                        <span className="text-[10px] uppercase tracking-wider text-emerald-700 bg-emerald-200/60 px-2 py-0.5 rounded-full font-black">
-                          Overcame Wave
-                        </span>
-                      </button>
-
-                      {/* Option 2: Still Craving */}
-                      <button
-                        onClick={startMemoryGame}
-                        className="w-full py-2.5 px-4 bg-amber-50 hover:bg-amber-100 text-amber-950 font-extrabold text-xs rounded-2xl border border-amber-200 transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] text-left flex items-center justify-between"
-                      >
-                        <span>
-                          {language === "ms"
-                            ? "😐 Masih Teringin"
-                            : language === "zh"
-                            ? "😐 依然想吸"
-                            : language === "ko"
-                            ? "😐 여전히 갈망함"
-                            : "😐 Still Craving"}
-                        </span>
-                        <span className="text-[10px] uppercase tracking-wider text-amber-700 bg-amber-200/60 px-2 py-0.5 rounded-full font-black">
-                          Brain Challenge 🧠
-                        </span>
-                      </button>
-
-                      {/* Option 3: Craving is Getting Stronger */}
-                      <button
-                        onClick={startMemoryGame}
-                        className="w-full py-2.5 px-4 bg-rose-50 hover:bg-rose-100 text-rose-950 font-extrabold text-xs rounded-2xl border border-rose-200 transition-all cursor-pointer hover:scale-[1.01] active:scale-[0.99] text-left flex items-center justify-between"
-                      >
-                        <span>
-                          {language === "ms"
-                            ? "😣 Ketagihan Makin Kuat"
-                            : language === "zh"
-                            ? "😣 渴望更加强烈"
-                            : language === "ko"
-                            ? "😣 갈망이 더 심해짐"
-                            : "😣 Craving is Getting Stronger"}
-                        </span>
-                        <span className="text-[10px] uppercase tracking-wider text-rose-700 bg-rose-200/60 px-2 py-0.5 rounded-full font-black">
-                          Surprise Game 🎮
-                        </span>
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleReset}
-                      className="flex-1 py-2.5 px-4 bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold text-xs rounded-2xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
-                    >
-                      <RefreshCw className="w-3.5 h-3.5" />
-                      <span>{resetText[language] || resetText.en}</span>
-                    </button>
-                  </div>
-                </div>
+              {viewStep === "chat" && (
+                <BloomChatPanel
+                  key={chatKey}
+                  language={language}
+                  activeHabit={activeHabit}
+                  onFeelingBetter={() => setViewStep("better")}
+                  onStillCraving={startMemoryGame}
+                  onLeave={() => setIsOpen(false)}
+                />
               )}
 
               {/* STEP 3A: FEELING BETTER CELEBRATION */}
               {viewStep === "better" && (
                 <div className="py-6 px-4 text-center space-y-4 animate-fadeIn">
                   <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto shadow-inner">
-                    <Sparkles className="w-8 h-8 animate-bounce" />
+                    <Trophy className="w-8 h-8 animate-bounce" />
                   </div>
 
                   <h4 className="text-lg font-serif font-black text-stone-900">
@@ -591,10 +390,16 @@ export default function UrgeQuestModal({ language, activeHabit = "vape" }: UrgeQ
                   </p>
 
                   <button
-                    onClick={() => setIsOpen(false)}
+                    onClick={handleResetToChat}
                     className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-2xl transition-all cursor-pointer shadow-lg shadow-emerald-600/20"
                   >
-                    Done & Return to Bloom 🌸
+                    Continue chatting
+                  </button>
+                  <button
+                    onClick={() => setIsOpen(false)}
+                    className="w-full py-2.5 bg-stone-100 hover:bg-stone-200 text-stone-800 font-bold text-xs rounded-2xl transition-all cursor-pointer border-none"
+                  >
+                    Done & Return to Bloom
                   </button>
                 </div>
               )}
