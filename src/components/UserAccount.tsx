@@ -178,16 +178,20 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
           return;
         }
 
+        const emailLocal = trimmedEmail.split("@")[0] || trimmedEmail;
         const authenticatedUser =
           res.profile?.username ||
           res.user?.user_metadata?.username ||
-          trimmedEmail.split("@")[0] ||
+          emailLocal ||
           trimmedEmail;
         const userId = res.user?.id;
 
         // Sync cloud data retrieved from Supabase to local state & storage!
         if (userId) {
           localStorage.setItem(`bloom_supabase_user_id_${authenticatedUser}`, userId);
+          if (emailLocal !== authenticatedUser) {
+            localStorage.setItem(`bloom_supabase_user_id_${emailLocal}`, userId);
+          }
         }
         if (res.logs && res.logs.length > 0) {
           localStorage.setItem(`bloom_recovery_logs_v4_${authenticatedUser}`, JSON.stringify(res.logs));
@@ -195,12 +199,59 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
         if (res.journals && res.journals.length > 0) {
           localStorage.setItem(`bloom_journal_entries_v4_${authenticatedUser}`, JSON.stringify(res.journals));
         }
-        if (res.smokingProfile) {
-          localStorage.setItem(`bloom_smoking_profile_${authenticatedUser}`, JSON.stringify(res.smokingProfile));
+
+        // Prefer cloud profile; fall back to any locally saved profile under known username keys
+        let restoredProfile = res.smokingProfile || null;
+        if (!restoredProfile) {
+          for (const key of [authenticatedUser, emailLocal]) {
+            const raw = localStorage.getItem(`bloom_smoking_profile_${key}`);
+            if (!raw) continue;
+            try {
+              restoredProfile = JSON.parse(raw);
+              break;
+            } catch {
+              /* ignore bad cache */
+            }
+          }
+        }
+        if (restoredProfile) {
+          localStorage.setItem(
+            `bloom_smoking_profile_${authenticatedUser}`,
+            JSON.stringify(restoredProfile)
+          );
         }
 
+        // Returning users (already completed habit profile) skip the tutorial
+        const tourAlreadySeen =
+          restoredProfile?.hasSeenTour === true ||
+          localStorage.getItem(`bloom_tour_guide_seen_${authenticatedUser}`) === "true" ||
+          localStorage.getItem(`bloom_tour_guide_seen_${emailLocal}`) === "true" ||
+          (userId
+            ? localStorage.getItem(`bloom_tour_guide_seen_id_${userId}`) === "true"
+            : false) ||
+          localStorage.getItem("bloom_tour_guide_seen") === "true";
+
+        if (restoredProfile) {
+          localStorage.setItem(`bloom_tour_guide_seen_${authenticatedUser}`, "true");
+          if (userId) {
+            localStorage.setItem(`bloom_tour_guide_seen_id_${userId}`, "true");
+          }
+          if (!restoredProfile.hasSeenTour) {
+            localStorage.setItem(
+              `bloom_smoking_profile_${authenticatedUser}`,
+              JSON.stringify({ ...restoredProfile, hasSeenTour: true })
+            );
+          }
+        } else if (tourAlreadySeen) {
+          localStorage.setItem(`bloom_tour_guide_seen_${authenticatedUser}`, "true");
+          if (userId) {
+            localStorage.setItem(`bloom_tour_guide_seen_id_${userId}`, "true");
+          }
+        }
+
+        const isReturningUser = Boolean(restoredProfile);
         localStorage.setItem("bloom_current_user", authenticatedUser);
-        localStorage.setItem("bloom_current_page", "did_consume");
+        localStorage.setItem("bloom_current_page", isReturningUser ? "home" : "did_consume");
         setCurrentUser(authenticatedUser);
         if (onLoginStateChange) onLoginStateChange(authenticatedUser);
 
@@ -236,9 +287,22 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
       if (data.journals) {
         localStorage.setItem(`bloom_journal_entries_v4_${localUser}`, JSON.stringify(data.journals));
       }
+      if (data.smokingProfile) {
+        localStorage.setItem(
+          `bloom_smoking_profile_${localUser}`,
+          JSON.stringify(data.smokingProfile)
+        );
+      }
+
+      const hasLocalProfile = Boolean(
+        data.smokingProfile || localStorage.getItem(`bloom_smoking_profile_${localUser}`)
+      );
+      if (hasLocalProfile) {
+        localStorage.setItem(`bloom_tour_guide_seen_${localUser}`, "true");
+      }
 
       localStorage.setItem("bloom_current_user", localUser);
-      localStorage.setItem("bloom_current_page", "did_consume");
+      localStorage.setItem("bloom_current_page", hasLocalProfile ? "home" : "did_consume");
       setCurrentUser(localUser);
       if (onLoginStateChange) onLoginStateChange(localUser);
 

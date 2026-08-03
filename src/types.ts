@@ -46,6 +46,8 @@ export interface SmokingProfile {
   quitGoal: "complete" | "gradual" | "control_triggers";
   targetTimeline: "7_days" | "14_days" | "30_days" | "60_days";
   createdAt: string;
+  /** Persisted after the first-run tutorial so returning sign-ins skip it */
+  hasSeenTour?: boolean;
 }
 
 export interface JournalEntry {

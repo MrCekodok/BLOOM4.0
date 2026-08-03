@@ -457,11 +457,29 @@ export default function App() {
             return merged;
           });
           if (cloud.smokingProfile) {
-            setSmokingProfile(cloud.smokingProfile);
+            const showTourOnce =
+              sessionStorage.getItem(`bloom_show_tour_once_${activeUser}`) === "1";
+            const returningProfile = {
+              ...cloud.smokingProfile,
+              // Returning cloud profiles skip the first-run tutorial
+              hasSeenTour: showTourOnce
+                ? cloud.smokingProfile.hasSeenTour === true
+                : true
+            };
+            if (!showTourOnce) {
+              localStorage.setItem(`bloom_tour_guide_seen_${activeUser}`, "true");
+              if (resolvedUserId) {
+                localStorage.setItem(`bloom_tour_guide_seen_id_${resolvedUserId}`, "true");
+              }
+            }
+            setSmokingProfile(returningProfile);
             localStorage.setItem(
               `bloom_smoking_profile_${activeUser}`,
-              JSON.stringify(cloud.smokingProfile)
+              JSON.stringify(returningProfile)
             );
+          } else if (cloud.logs.length > 0 || cloud.journals.length > 0) {
+            // Prior activity without a profile object — still skip the tutorial
+            localStorage.setItem(`bloom_tour_guide_seen_${activeUser}`, "true");
           }
         }
       } catch (err) {
@@ -477,15 +495,28 @@ export default function App() {
     };
   }, [activeUser]);
 
-  // Check if onboarding tour guide should pop up (first time user completes profile)
+  // First-run tour only — returning users (existing habit profile) skip it
   useEffect(() => {
-    if (activeUser && smokingProfile) {
-      const isDone = localStorage.getItem(`bloom_tour_guide_seen_${activeUser}`);
-      if (!isDone) {
-        setIsGuideOpen(true);
-      }
+    if (!activeUser || !smokingProfile || !cloudHydrated) return;
+
+    const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
+    const tourSeen =
+      smokingProfile.hasSeenTour === true ||
+      localStorage.getItem(`bloom_tour_guide_seen_${activeUser}`) === "true" ||
+      (userId
+        ? localStorage.getItem(`bloom_tour_guide_seen_id_${userId}`) === "true"
+        : false) ||
+      localStorage.getItem("bloom_tour_guide_seen") === "true";
+
+    const showTourOnce =
+      sessionStorage.getItem(`bloom_show_tour_once_${activeUser}`) === "1";
+
+    if (showTourOnce && !tourSeen) {
+      setIsGuideOpen(true);
+    } else {
+      setIsGuideOpen(false);
     }
-  }, [activeUser, smokingProfile]);
+  }, [activeUser, smokingProfile, cloudHydrated]);
 
 
 
@@ -1171,7 +1202,18 @@ export default function App() {
               <UserAccount
                 onLoginStateChange={(username) => {
                   setActiveUser(username);
-                  if (username) handleSetCurrentPage("did_consume");
+                  if (username) {
+                    const savedPage = localStorage.getItem("bloom_current_page");
+                    if (
+                      savedPage === "did_consume" ||
+                      savedPage === "plant_progress" ||
+                      savedPage === "home"
+                    ) {
+                      handleSetCurrentPage(savedPage);
+                    } else {
+                      handleSetCurrentPage("did_consume");
+                    }
+                  }
                 }}
                 language={language}
                 onOpenLegal={handleOpenLegal}
@@ -1309,6 +1351,22 @@ export default function App() {
 
             </div>
           </div>
+        ) : !cloudHydrated && isSupabaseConfigured() && !smokingProfile ? (
+          /* Wait for cloud profile before asking a returning user to set up habits again */
+          <div className="flex justify-center w-full relative z-10 pt-16 pb-4">
+            <div className="text-center space-y-3 px-6">
+              <div className="w-10 h-10 mx-auto rounded-full border-4 border-emerald-200 border-t-emerald-700 animate-spin" />
+              <p className="text-sm font-bold text-emerald-950/80">
+                {language === "ms"
+                  ? "Memuatkan taman anda…"
+                  : language === "zh"
+                    ? "正在加载你的花园…"
+                    : language === "ko"
+                      ? "정원을 불러오는 중…"
+                      : "Loading your garden…"}
+              </p>
+            </div>
+          </div>
         ) : !smokingProfile ? (
           /* HABIT PROFILE ONBOARDING SETUP */
           <div className="flex justify-center w-full relative z-10 pt-2 pb-4">
@@ -1319,6 +1377,8 @@ export default function App() {
                 if (activeUser) {
                   localStorage.setItem(`bloom_smoking_profile_${activeUser}`, JSON.stringify(prof));
                   localStorage.setItem(`bloom_seed_type_${activeUser}`, "tomato");
+                  // Only brand-new profiles trigger the first-run tutorial
+                  sessionStorage.setItem(`bloom_show_tour_once_${activeUser}`, "1");
                 }
               }}
             />
@@ -1653,6 +1713,20 @@ export default function App() {
           setIsGuideOpen(false);
           if (activeUser) {
             localStorage.setItem(`bloom_tour_guide_seen_${activeUser}`, "true");
+            localStorage.setItem("bloom_tour_guide_seen", "true");
+            sessionStorage.removeItem(`bloom_show_tour_once_${activeUser}`);
+            const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`);
+            if (userId) {
+              localStorage.setItem(`bloom_tour_guide_seen_id_${userId}`, "true");
+            }
+            if (smokingProfile && !smokingProfile.hasSeenTour) {
+              const updated = { ...smokingProfile, hasSeenTour: true };
+              setSmokingProfile(updated);
+              localStorage.setItem(
+                `bloom_smoking_profile_${activeUser}`,
+                JSON.stringify(updated)
+              );
+            }
           }
         }}
         plantName={
