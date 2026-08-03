@@ -2,12 +2,25 @@
 -- Safe to re-run: tables use IF NOT EXISTS; policies are dropped then recreated.
 -- Run in: https://supabase.com/dashboard/project/ztotxpjsrqkpsjeeswfm/sql/new
 
+-- 0. Repair: older schema drafts required profiles.email NOT NULL without the app writing it
+ALTER TABLE IF EXISTS public.profiles
+  ALTER COLUMN email DROP NOT NULL;
+
+ALTER TABLE IF EXISTS public.profiles
+  ALTER COLUMN username SET NOT NULL;
+
 -- 1. Profiles (linked to auth.users)
 CREATE TABLE IF NOT EXISTS public.profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   username TEXT NOT NULL,
+  email TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Add missing columns on existing installs
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 
@@ -36,7 +49,7 @@ CREATE POLICY "Users can delete own profile"
   ON public.profiles FOR DELETE
   USING (auth.uid() = id);
 
--- 2. User progress (JSONB logs/journals)
+-- 2. User progress (JSONB logs/journals/smoking_profile)
 CREATE TABLE IF NOT EXISTS public.user_data (
   user_id UUID PRIMARY KEY REFERENCES public.profiles(id) ON DELETE CASCADE,
   logs JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -46,6 +59,13 @@ CREATE TABLE IF NOT EXISTS public.user_data (
   smoking_profile JSONB,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS logs JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS journals JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS seed_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS notification_settings JSONB;
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS smoking_profile JSONB;
+ALTER TABLE public.user_data ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
 
 ALTER TABLE public.user_data ENABLE ROW LEVEL SECURITY;
 

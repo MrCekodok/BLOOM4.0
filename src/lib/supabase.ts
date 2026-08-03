@@ -44,7 +44,8 @@ export interface SupabaseProfile {
 
 /**
  * Ensures user profile exists in 'profiles' table after successful auth.
- * Schema: profiles(id, username, created_at) — progress lives in user_data.
+ * Schema: profiles(id, username, created_at) — optional email if column exists.
+ * Progress lives in user_data.
  */
 export async function ensureUserProfile(
   userId: string,
@@ -76,25 +77,51 @@ export async function ensureUserProfile(
       };
     }
 
-    const { data: inserted, error: insertErr } = await supabase
-      .from("profiles")
-      .upsert(
-        {
-          id: userId,
-          username: fallbackProfile.username
-        },
-        { onConflict: "id" }
-      )
-      .select("id, username, created_at")
-      .single();
+    // Prefer including email — some projects still have email NOT NULL
+    let inserted = null as { id: string; username: string; created_at: string } | null;
+    let insertErr: { message: string } | null = null;
+
+    {
+      const res = await supabase
+        .from("profiles")
+        .upsert(
+          {
+            id: userId,
+            username: fallbackProfile.username,
+            email
+          },
+          { onConflict: "id" }
+        )
+        .select("id, username, created_at")
+        .single();
+      inserted = res.data;
+      insertErr = res.error;
+    }
+
+    // Fallback for schemas without an email column
+    if (insertErr && /email|column/i.test(insertErr.message)) {
+      const res = await supabase
+        .from("profiles")
+        .upsert(
+          {
+            id: userId,
+            username: fallbackProfile.username
+          },
+          { onConflict: "id" }
+        )
+        .select("id, username, created_at")
+        .single();
+      inserted = res.data;
+      insertErr = res.error;
+    }
 
     if (insertErr) {
       console.error("Error creating Supabase profile:", insertErr.message);
-      return { success: true, profile: fallbackProfile };
+      return { success: false, profile: fallbackProfile, error: insertErr.message };
     }
 
     // Ensure a user_data row exists for progress sync
-    await supabase.from("user_data").upsert(
+    const { error: userDataErr } = await supabase.from("user_data").upsert(
       {
         user_id: userId,
         logs: [],
@@ -103,6 +130,9 @@ export async function ensureUserProfile(
       },
       { onConflict: "user_id" }
     );
+    if (userDataErr) {
+      console.error("Error creating user_data row:", userDataErr.message);
+    }
 
     return {
       success: true,
@@ -110,7 +140,7 @@ export async function ensureUserProfile(
     };
   } catch (err: any) {
     console.error("Exception in ensureUserProfile:", err);
-    return { success: true, profile: fallbackProfile };
+    return { success: false, profile: fallbackProfile, error: err?.message };
   }
 }
 
