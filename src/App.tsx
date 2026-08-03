@@ -290,7 +290,15 @@ export default function App() {
     try {
       let supabaseOk = true;
       if (isSupabaseConfigured()) {
-        const userId = localStorage.getItem(`bloom_supabase_user_id_${payload.activeUser}`) || "";
+        let userId = localStorage.getItem(`bloom_supabase_user_id_${payload.activeUser}`) || "";
+        if (!userId) {
+          const { data } = await supabase.auth.getSession();
+          userId = data.session?.user?.id || "";
+          if (userId) {
+            localStorage.setItem(`bloom_supabase_user_id_${payload.activeUser}`, userId);
+          }
+        }
+
         if (userId) {
           supabaseOk = await syncUserProgressToSupabase(
             userId,
@@ -299,6 +307,9 @@ export default function App() {
             payload.smokingProfile,
             { seedType: payload.seedType }
           );
+        } else {
+          // Online but no auth session / user id → cannot sync to cloud
+          supabaseOk = false;
         }
       }
 

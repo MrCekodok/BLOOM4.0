@@ -311,6 +311,7 @@ export async function signInWithSupabase(
 
 /**
  * Saves/syncs logs, journals, and smoking profile to public.user_data (JSONB).
+ * Ensures the profiles row exists first so user_data FK upserts do not fail.
  */
 export async function syncUserProgressToSupabase(
   userId: string,
@@ -322,6 +323,23 @@ export async function syncUserProgressToSupabase(
   if (!isSupabaseConfigured() || !userId) return false;
 
   try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const sessionUser = sessionData.session?.user;
+    if (!sessionUser || sessionUser.id !== userId) {
+      console.error("Error syncing progress: no matching Supabase session for user.");
+      return false;
+    }
+
+    const email = sessionUser.email || "";
+    const username =
+      sessionUser.user_metadata?.username || email.split("@")[0] || "user";
+
+    const profileRes = await ensureUserProfile(userId, email, username);
+    if (!profileRes.success) {
+      console.error("Error syncing progress: could not ensure profile.", profileRes.error);
+      return false;
+    }
+
     const payload: Record<string, unknown> = {
       user_id: userId,
       logs: logs || [],
