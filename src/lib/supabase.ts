@@ -369,6 +369,40 @@ export async function syncUserProgressToSupabase(
 }
 
 /**
+ * Wipes all recovery progress for a user in Supabase user_data
+ * (logs, journals, smoking profile) without deleting the auth account.
+ */
+export async function clearUserProgressInSupabase(userId: string): Promise<boolean> {
+  if (!isSupabaseConfigured() || !userId) return false;
+
+  try {
+    const { error } = await supabase
+      .from("user_data")
+      .upsert(
+        {
+          user_id: userId,
+          logs: [],
+          journals: [],
+          smoking_profile: null,
+          seed_type: "tomato",
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: "user_id" }
+      );
+
+    if (error) {
+      console.error("Error clearing user_data in Supabase:", error.message);
+      return false;
+    }
+
+    return true;
+  } catch (err) {
+    console.error("Error clearing user progress in Supabase:", err);
+    return false;
+  }
+}
+
+/**
  * Fetches latest user data from Supabase across devices.
  */
 export async function fetchUserDataFromSupabase(userId: string): Promise<{

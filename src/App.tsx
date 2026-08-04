@@ -21,7 +21,7 @@ import AccountSettingsModal from "./components/AccountSettingsModal";
 import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
-import { supabase, syncUserProgressToSupabase, fetchUserDataFromSupabase, isSupabaseConfigured } from "./lib/supabase";
+import { supabase, syncUserProgressToSupabase, fetchUserDataFromSupabase, clearUserProgressInSupabase, isSupabaseConfigured } from "./lib/supabase";
 import { isBloomAnalyticsEnabled } from "./lib/features";
 import { buildWeeklyInsight, buildMonthlyInsight } from "./lib/weeklyInsights";
 import WeeklyInsightsCard from "./components/WeeklyInsightsCard";
@@ -661,32 +661,77 @@ export default function App() {
     }
   }, [activeUser]);
 
-  const handleClearAll = () => {
-    // Clear all recovery data versions
+  const handleClearAll = async () => {
+    const user = activeUser;
+
+    // Clear legacy + global recovery keys
     localStorage.removeItem("bloom_recovery_logs_raw");
     localStorage.removeItem("bloom_recovery_logs");
     localStorage.removeItem("bloom_recovery_logs_v2");
     localStorage.removeItem("bloom_recovery_logs_v4");
-
-    if (activeUser) {
-      localStorage.removeItem(`bloom_recovery_logs_v4_${activeUser}`);
-      localStorage.removeItem(`bloom_journal_entries_v4_${activeUser}`);
-      localStorage.removeItem(`bloom_seed_type_${activeUser}`);
-      localStorage.removeItem(`bloom_smoking_profile_${activeUser}`);
-    }
-    
-    // Clear all general journals
     localStorage.removeItem("bloom_journal_entries_v4");
-    
-    // Clear background notifications preference state
     localStorage.removeItem("bloom_reminders_enabled");
     localStorage.removeItem("bloom_reminder_time");
     localStorage.removeItem("bloom_last_notified_date");
+    localStorage.removeItem("bloom_tour_guide_seen");
+
+    if (user) {
+      const userId = localStorage.getItem(`bloom_supabase_user_id_${user}`) || "";
+
+      // Wipe every per-account progress key for this user
+      localStorage.removeItem(`bloom_recovery_logs_v4_${user}`);
+      localStorage.removeItem(`bloom_journal_entries_v4_${user}`);
+      localStorage.removeItem(`bloom_seed_type_${user}`);
+      localStorage.removeItem(`bloom_smoking_profile_${user}`);
+      localStorage.removeItem(`bloom_spent_coins_${user}`);
+      localStorage.removeItem(`bloom_plant_is_broken_${user}`);
+      localStorage.removeItem(`bloom_plant_restored_date_${user}`);
+      localStorage.removeItem(`bloom_saved_plant_level_${user}`);
+      localStorage.removeItem(`bloom_tour_guide_seen_${user}`);
+      localStorage.removeItem(`bloom_sync_pending_${user}`);
+      localStorage.removeItem(`bloom_user_avatar`);
+      if (userId) {
+        localStorage.removeItem(`bloom_tour_guide_seen_id_${userId}`);
+      }
+      sessionStorage.removeItem(`bloom_show_tour_once_${user}`);
+
+      // Clear cloud copy so hydrate cannot restore wiped data
+      if (isSupabaseConfigured() && userId) {
+        try {
+          await clearUserProgressInSupabase(userId);
+        } catch (err) {
+          console.warn("Could not clear cloud progress:", err);
+        }
+      }
+
+      // Best-effort clear of local Express mirror
+      try {
+        await fetch("/api/sync/push", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            username: user,
+            logs: [],
+            journals: [],
+            seedType: "tomato",
+            smokingProfile: null
+          })
+        });
+      } catch {
+        /* optional local server */
+      }
+    }
 
     setLogs([]);
     setJournals([]);
-    
-    // Reload dynamically to apply changes. Since we do not delete bloom_current_user or bloom_registered_users, they remain logged in!
+    setSmokingProfile(null);
+    setSpentCoins(0);
+    setIsPlantBroken(false);
+    setRestoredDate("");
+    setSavedPlantLevel(0);
+    localStorage.setItem("bloom_current_page", "did_consume");
+
+    // Stay logged in; reload so gates (habit profile, empty home) apply cleanly
     window.location.reload();
   };
 
@@ -1656,12 +1701,12 @@ export default function App() {
                       <div className="flex items-center gap-2 animate-bounce">
                         <button
                           onClick={() => {
-                            handleClearAll();
+                            void handleClearAll();
                             setConfirmWipe(false);
                           }}
                           className="text-xs font-extrabold text-white bg-red-600 hover:bg-red-700 px-4 py-2.5 rounded-full shadow-md cursor-pointer transition-all active:scale-95 border-none"
                         >
-                          ⚠️ Are you sure? Click to WIPE ALL RECORDS
+                          ⚠️ Are you sure? Click to WIPE ALL ACCOUNT DATA
                         </button>
                         <button
                           onClick={() => setConfirmWipe(false)}
