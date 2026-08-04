@@ -6,9 +6,9 @@ import { LegalTab } from "./LegalPagesModal";
 import {
   signUpWithSupabase,
   signInWithSupabase,
-  isSupabaseConfigured,
-  fetchUserDataFromSupabase
+  isSupabaseConfigured
 } from "../lib/supabase";
+import { endBloomSession } from "../lib/accountStorage";
 
 
 interface UserAccountProps {
@@ -193,22 +193,25 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
             localStorage.setItem(`bloom_supabase_user_id_${emailLocal}`, userId);
           }
         }
-        if (res.logs && res.logs.length > 0) {
-          localStorage.setItem(`bloom_recovery_logs_v4_${authenticatedUser}`, JSON.stringify(res.logs));
-        }
-        if (res.journals && res.journals.length > 0) {
-          localStorage.setItem(`bloom_journal_entries_v4_${authenticatedUser}`, JSON.stringify(res.journals));
-        }
 
-        // Prefer cloud profile; fall back to any locally saved profile under known username keys
+        // Always write this account's cloud snapshot into its own keys (never leave
+        // another account's leftover local arrays under this username).
+        localStorage.setItem(
+          `bloom_recovery_logs_v4_${authenticatedUser}`,
+          JSON.stringify(res.logs || [])
+        );
+        localStorage.setItem(
+          `bloom_journal_entries_v4_${authenticatedUser}`,
+          JSON.stringify(res.journals || [])
+        );
+
+        // Prefer cloud profile only — do not reuse another username's local profile
         let restoredProfile = res.smokingProfile || null;
         if (!restoredProfile) {
-          for (const key of [authenticatedUser, emailLocal]) {
-            const raw = localStorage.getItem(`bloom_smoking_profile_${key}`);
-            if (!raw) continue;
+          const raw = localStorage.getItem(`bloom_smoking_profile_${authenticatedUser}`);
+          if (raw) {
             try {
               restoredProfile = JSON.parse(raw);
-              break;
             } catch {
               /* ignore bad cache */
             }
@@ -219,17 +222,17 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
             `bloom_smoking_profile_${authenticatedUser}`,
             JSON.stringify(restoredProfile)
           );
+        } else {
+          localStorage.removeItem(`bloom_smoking_profile_${authenticatedUser}`);
         }
 
         // Returning users (already completed habit profile) skip the tutorial
         const tourAlreadySeen =
           restoredProfile?.hasSeenTour === true ||
           localStorage.getItem(`bloom_tour_guide_seen_${authenticatedUser}`) === "true" ||
-          localStorage.getItem(`bloom_tour_guide_seen_${emailLocal}`) === "true" ||
           (userId
             ? localStorage.getItem(`bloom_tour_guide_seen_id_${userId}`) === "true"
-            : false) ||
-          localStorage.getItem("bloom_tour_guide_seen") === "true";
+            : false);
 
         if (restoredProfile) {
           localStorage.setItem(`bloom_tour_guide_seen_${authenticatedUser}`, "true");
@@ -281,17 +284,21 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
 
       const localUser = data.username || trimmedEmail.split("@")[0] || trimmedEmail;
 
-      if (data.logs) {
-        localStorage.setItem(`bloom_recovery_logs_v4_${localUser}`, JSON.stringify(data.logs));
-      }
-      if (data.journals) {
-        localStorage.setItem(`bloom_journal_entries_v4_${localUser}`, JSON.stringify(data.journals));
-      }
+      localStorage.setItem(
+        `bloom_recovery_logs_v4_${localUser}`,
+        JSON.stringify(data.logs || [])
+      );
+      localStorage.setItem(
+        `bloom_journal_entries_v4_${localUser}`,
+        JSON.stringify(data.journals || [])
+      );
       if (data.smokingProfile) {
         localStorage.setItem(
           `bloom_smoking_profile_${localUser}`,
           JSON.stringify(data.smokingProfile)
         );
+      } else {
+        localStorage.removeItem(`bloom_smoking_profile_${localUser}`);
       }
 
       const hasLocalProfile = Boolean(
@@ -337,15 +344,16 @@ export default function UserAccount({ onLoginStateChange, language, onOpenLegal,
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("bloom_current_user");
-    localStorage.setItem("bloom_just_logged_out", "true");
-    setCurrentUser(null);
-    if (onLoginStateChange) onLoginStateChange(null);
-    showFeedback("success", translate(language, "accSuccessLogout"));
-    clearInputs();
-    setTimeout(() => {
-      window.location.reload();
-    }, 500);
+    void (async () => {
+      await endBloomSession();
+      setCurrentUser(null);
+      if (onLoginStateChange) onLoginStateChange(null);
+      showFeedback("success", translate(language, "accSuccessLogout"));
+      clearInputs();
+      setTimeout(() => {
+        window.location.reload();
+      }, 500);
+    })();
   };
 
   return (

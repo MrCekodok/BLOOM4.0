@@ -22,6 +22,7 @@ import { getStoredTheme, applyTheme, ThemeId } from "./theme";
 import greenhouseBg from "./assets/images/greenhouse_garden_bg_1785109902243.jpg";
 import greenhouseInteriorBg from "./assets/images/greenhouse_interior_bg_1785110978329.jpg";
 import { supabase, syncUserProgressToSupabase, fetchUserDataFromSupabase, clearUserProgressInSupabase, isSupabaseConfigured } from "./lib/supabase";
+import { clearLegacyUnscopedProgressKeys, endBloomSession, sessionMatchesActiveUser } from "./lib/accountStorage";
 import { isBloomAnalyticsEnabled } from "./lib/features";
 import { buildWeeklyInsight, buildMonthlyInsight } from "./lib/weeklyInsights";
 import WeeklyInsightsCard from "./components/WeeklyInsightsCard";
@@ -293,8 +294,9 @@ export default function App() {
         let userId = localStorage.getItem(`bloom_supabase_user_id_${payload.activeUser}`) || "";
         if (!userId) {
           const { data } = await supabase.auth.getSession();
-          userId = data.session?.user?.id || "";
-          if (userId) {
+          const sessionUser = data.session?.user;
+          if (sessionUser && sessionMatchesActiveUser(payload.activeUser, sessionUser)) {
+            userId = sessionUser.id;
             localStorage.setItem(`bloom_supabase_user_id_${payload.activeUser}`, userId);
           }
         }
@@ -343,10 +345,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    // Proactively delete older data versions to ensure a completely fresh start
-    localStorage.removeItem("bloom_recovery_logs_raw");
-    localStorage.removeItem("bloom_recovery_logs");
-    localStorage.removeItem("bloom_recovery_logs_v2");
+    // Drop obsolete unscoped keys so they cannot migrate into the next account
+    clearLegacyUnscopedProgressKeys();
     setCloudHydrated(false);
     
     if (activeUser) {
@@ -364,26 +364,13 @@ export default function App() {
       const saved = localStorage.getItem(`bloom_recovery_logs_v4_${activeUser}`);
       if (saved) {
         try {
-          const parsed = JSON.parse(saved);
-          setLogs(parsed);
+          setLogs(JSON.parse(saved));
         } catch (err) {
           console.error("Error parsing saved recovery logs:", err);
           setLogs([]);
         }
       } else {
-        // Import legacy global logs if they exist during initial migration
-        const oldLogs = localStorage.getItem("bloom_recovery_logs_v4");
-        if (oldLogs) {
-          try {
-            const parsed = JSON.parse(oldLogs);
-            setLogs(parsed);
-            localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, oldLogs);
-          } catch (e) {
-            setLogs([]);
-          }
-        } else {
-          setLogs([]);
-        }
+        setLogs([]);
       }
 
       const savedJournals = localStorage.getItem(`bloom_journal_entries_v4_${activeUser}`);
@@ -395,24 +382,17 @@ export default function App() {
           setJournals([]);
         }
       } else {
-        const oldJournals = localStorage.getItem("bloom_journal_entries_v4");
-        if (oldJournals) {
-          try {
-            const parsed = JSON.parse(oldJournals);
-            setJournals(parsed);
-            localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, oldJournals);
-          } catch (e) {
-            setJournals([]);
-          }
-        } else {
-          setJournals([]);
-        }
+        setJournals([]);
       }
     } else {
-      // If user logs out, all data completely vanishes
+      // Logged out — wipe in-memory account data (other users' keyed storage stays intact)
       setLogs([]);
       setJournals([]);
       setSmokingProfile(null);
+      setSpentCoins(0);
+      setIsPlantBroken(false);
+      setRestoredDate("");
+      setSavedPlantLevel(0);
       setIsGuideOpen(false);
       setCloudHydrated(true);
     }
@@ -429,13 +409,14 @@ export default function App() {
 
     const hydrateFromCloud = async () => {
       try {
-        const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
-        let resolvedUserId = userId;
+        let resolvedUserId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`) || "";
 
         if (!resolvedUserId) {
           const { data } = await supabase.auth.getSession();
-          resolvedUserId = data.session?.user?.id || "";
-          if (resolvedUserId) {
+          const sessionUser = data.session?.user;
+          // Never attach another account's session UUID to this username
+          if (sessionUser && sessionMatchesActiveUser(activeUser, sessionUser)) {
+            resolvedUserId = sessionUser.id;
             localStorage.setItem(`bloom_supabase_user_id_${activeUser}`, resolvedUserId);
           }
         }
@@ -448,9 +429,11 @@ export default function App() {
         const cloud = await fetchUserDataFromSupabase(resolvedUserId);
         if (cancelled) return;
 
+        // Cloud row for this auth user is authoritative for that account's snapshot.
+        // Prefer remote on id conflicts so leftover wrong-account local rows cannot win.
         const mergeById = <T extends { id: string }>(local: T[], remote: T[]): T[] => {
           const map = new Map<string, T>();
-          [...remote, ...local].forEach((item) => {
+          [...local, ...remote].forEach((item) => {
             if (item?.id) map.set(item.id, item);
           });
           return Array.from(map.values());
@@ -516,8 +499,7 @@ export default function App() {
       localStorage.getItem(`bloom_tour_guide_seen_${activeUser}`) === "true" ||
       (userId
         ? localStorage.getItem(`bloom_tour_guide_seen_id_${userId}`) === "true"
-        : false) ||
-      localStorage.getItem("bloom_tour_guide_seen") === "true";
+        : false);
 
     const showTourOnce =
       sessionStorage.getItem(`bloom_show_tour_once_${activeUser}`) === "1";
@@ -689,7 +671,8 @@ export default function App() {
       localStorage.removeItem(`bloom_saved_plant_level_${user}`);
       localStorage.removeItem(`bloom_tour_guide_seen_${user}`);
       localStorage.removeItem(`bloom_sync_pending_${user}`);
-      localStorage.removeItem(`bloom_user_avatar`);
+      localStorage.removeItem(`bloom_user_avatar_${user}`);
+      localStorage.removeItem("bloom_user_avatar");
       if (userId) {
         localStorage.removeItem(`bloom_tour_guide_seen_id_${userId}`);
       }
@@ -748,7 +731,6 @@ export default function App() {
       if (activeUser) {
         localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, JSON.stringify(updated));
       }
-      localStorage.setItem("bloom_journal_entries_v4", JSON.stringify(updated));
       return updated;
     });
   };
@@ -759,7 +741,6 @@ export default function App() {
       if (activeUser) {
         localStorage.setItem(`bloom_journal_entries_v4_${activeUser}`, JSON.stringify(updated));
       }
-      localStorage.setItem("bloom_journal_entries_v4", JSON.stringify(updated));
       return updated;
     });
   };
@@ -778,7 +759,6 @@ export default function App() {
       if (activeUser) {
         localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, JSON.stringify(updated));
       }
-      localStorage.setItem("bloom_recovery_logs_v4", JSON.stringify(updated));
       return updated;
     });
   };
@@ -814,7 +794,6 @@ export default function App() {
       if (activeUser) {
         localStorage.setItem(`bloom_recovery_logs_v4_${activeUser}`, JSON.stringify(updated));
       }
-      localStorage.setItem("bloom_recovery_logs_v4", JSON.stringify(updated));
       return updated;
     });
   };
@@ -954,10 +933,11 @@ export default function App() {
   const stats = getTriggerStats();
 
   const handleLogout = () => {
-    localStorage.removeItem("bloom_current_user");
-    localStorage.setItem("bloom_just_logged_out", "true");
-    setActiveUser(null);
-    window.location.reload();
+    void (async () => {
+      await endBloomSession();
+      setActiveUser(null);
+      window.location.reload();
+    })();
   };
 
   const isCompactPage = !activeUser || currentPage !== "home";
@@ -1769,7 +1749,6 @@ export default function App() {
           setIsGuideOpen(false);
           if (activeUser) {
             localStorage.setItem(`bloom_tour_guide_seen_${activeUser}`, "true");
-            localStorage.setItem("bloom_tour_guide_seen", "true");
             sessionStorage.removeItem(`bloom_show_tour_once_${activeUser}`);
             const userId = localStorage.getItem(`bloom_supabase_user_id_${activeUser}`);
             if (userId) {

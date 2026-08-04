@@ -82,16 +82,27 @@ export default function Header({ onAvatarChanged, logs = [], activeUser = null, 
   }, [isModalOpen]);
 
   useEffect(() => {
-    const saved = localStorage.getItem("bloom_user_avatar");
+    if (!activeUser) return;
+    const saved =
+      localStorage.getItem(`bloom_user_avatar_${activeUser}`) ||
+      localStorage.getItem("bloom_user_avatar");
     if (saved) {
       setSelectedAvatarId(saved);
+      localStorage.setItem(`bloom_user_avatar_${activeUser}`, saved);
+      localStorage.removeItem("bloom_user_avatar");
       if (onAvatarChanged) onAvatarChanged(saved);
+    } else {
+      setSelectedAvatarId("peony");
+      if (onAvatarChanged) onAvatarChanged("peony");
     }
-  }, []);
+  }, [activeUser]);
 
   const handleSelectAvatar = (id: string) => {
     setSelectedAvatarId(id);
-    localStorage.setItem("bloom_user_avatar", id);
+    if (activeUser) {
+      localStorage.setItem(`bloom_user_avatar_${activeUser}`, id);
+    }
+    localStorage.removeItem("bloom_user_avatar");
     if (onAvatarChanged) onAvatarChanged(id);
     setIsModalOpen(false);
   };

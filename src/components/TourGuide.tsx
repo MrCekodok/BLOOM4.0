@@ -63,20 +63,12 @@ export default function TourGuide({
       return;
     }
 
-    if (!isControlled) {
-      const seen = localStorage.getItem("bloom_tour_guide_seen");
-      if (!seen) {
-        const timer = setTimeout(() => {
-          setInternalIsOpen(true);
-        }, 800);
-        return () => clearTimeout(timer);
-      }
-    }
+    // Uncontrolled open is unused in App (tour is per-user via isOpen).
+    // Do not read a global "seen" flag — that would leak across accounts.
   }, [manualTrigger, isControlled]);
 
   const handleClose = () => {
     setInternalIsOpen(false);
-    localStorage.setItem("bloom_tour_guide_seen", "true");
     if (externalOnClose) externalOnClose();
     if (onDismiss) onDismiss();
   };
